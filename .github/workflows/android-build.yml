@@ -23,7 +23,11 @@ jobs:
           java-version: '17'
 
       - name: 3. Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools
 
       - name: 4. Setup Gradle with Caching
         uses: gradle/actions/setup-gradle@v4
