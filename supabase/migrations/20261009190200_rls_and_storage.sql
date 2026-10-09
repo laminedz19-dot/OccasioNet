@@ -28,10 +28,7 @@ CREATE POLICY "profiles_update_own_safe"
     ON public.profiles FOR UPDATE
     TO authenticated
     USING (auth.uid() = id AND is_banned = FALSE)
-    WITH CHECK (
-        auth.uid() = id
-        AND is_banned = (SELECT p.is_banned FROM public.profiles p WHERE p.id = auth.uid())
-    );
+    WITH CHECK (auth.uid() = id AND is_banned = FALSE);
 
 -- 2. سياسات user_roles (ممنوع على أي مستخدم تعديل دوره من العميل)
 DROP POLICY IF EXISTS "user_roles_select_own_or_admin" ON public.user_roles;
@@ -100,7 +97,6 @@ CREATE POLICY "listings_update_owner"
     WITH CHECK (
         auth.uid() = seller_id
         AND status IN ('published', 'sold', 'paused')
-        AND payment_request_id = (SELECT l.payment_request_id FROM public.listings l WHERE l.id = id)
     );
 
 -- 6. سياسات favorites
@@ -220,3 +216,36 @@ CREATE POLICY "listing_images_insert_own_folder"
         bucket_id = 'listing-images'
         AND (storage.foldername(name))[1] = auth.uid()::text
     );
+
+-- =============================================================================
+-- Explicit least-privilege SQL grants (RLS alone does not grant table access)
+-- =============================================================================
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+
+REVOKE ALL PRIVILEGES ON TABLE
+    public.profiles, public.user_roles, public.categories, public.wilayas,
+    public.communes, public.app_settings, public.payment_requests, public.listings,
+    public.favorites, public.reports, public.notifications, public.audit_logs
+FROM anon, authenticated;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+
+GRANT SELECT ON public.categories, public.wilayas, public.communes, public.app_settings TO anon, authenticated;
+GRANT SELECT ON public.listings TO anon, authenticated;
+GRANT INSERT, UPDATE, DELETE ON public.categories TO authenticated;
+
+GRANT SELECT ON public.profiles, public.user_roles, public.payment_requests,
+    public.favorites, public.reports, public.notifications, public.audit_logs TO authenticated;
+
+-- Clients may edit only ordinary profile fields; ban/email-verification fields stay server-managed.
+GRANT UPDATE (full_name, phone, wilaya_code, commune_id, avatar_url) ON public.profiles TO authenticated;
+
+-- Listing ownership and payment linkage are immutable from the client.
+GRANT UPDATE (category_id, wilaya_code, commune_id, title, description, price_dzd,
+    condition, status, contact_phone, image_urls) ON public.listings TO authenticated;
+
+GRANT INSERT, DELETE ON public.favorites TO authenticated;
+GRANT INSERT ON public.reports TO authenticated;
+GRANT UPDATE (status, reviewed_by, reviewed_at, admin_note) ON public.reports TO authenticated;
+GRANT UPDATE (is_read) ON public.notifications TO authenticated;
+
+GRANT USAGE, SELECT ON SEQUENCE public.categories_id_seq, public.communes_id_seq TO authenticated;

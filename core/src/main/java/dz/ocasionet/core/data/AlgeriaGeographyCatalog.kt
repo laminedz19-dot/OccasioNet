@@ -6,7 +6,7 @@ import dz.ocasionet.core.model.Wilaya
 
 /**
  * الدليل الجغرافي الجزائري الموثوق (58 ولاية رسمية والبلديات المرتبطة بها) + الفئات الأساسية.
- * متطابق 100% مع ملف الترحيل 004_seed_reference_data.sql.
+ * متطابق مع ترحيل البيانات المرجعية ذي الطابع الزمني في supabase/migrations/.
  */
 object AlgeriaGeographyCatalog {
 

@@ -3,12 +3,14 @@ package dz.ocasionet.core
 import dz.ocasionet.core.data.AlgeriaGeographyCatalog
 import dz.ocasionet.core.model.SupabaseConfigStatus
 import dz.ocasionet.core.network.SupabaseClientProvider
+import dz.ocasionet.core.network.authorizationHeaderForApiKey
 import dz.ocasionet.core.security.RlsPolicyVerifier
 import dz.ocasionet.core.security.SecurityViolationException
 import dz.ocasionet.core.security.SupabaseSchemaContract
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -311,6 +313,16 @@ class OccasioNetSecurityAndDomainTest {
     fun `13 - handles unconfigured Supabase and rejects service_role key in Android`() {
         val emptyStatus = SupabaseClientProvider.inspectConfig(rawUrl = "", rawAnonKey = "")
         assertTrue(emptyStatus is SupabaseConfigStatus.NotConfigured)
+        val sampleStatus = SupabaseClientProvider.inspectConfig(
+            rawUrl = "https://example.supabase.co",
+            rawAnonKey = "REPLACE_WITH_SUPABASE_PUBLISHABLE_KEY"
+        )
+        assertTrue(sampleStatus is SupabaseConfigStatus.NotConfigured)
+        val publishableStatus = SupabaseClientProvider.inspectConfig(
+            rawUrl = "https://example.supabase.co",
+            rawAnonKey = "sb_publishable_public-example"
+        )
+        assertTrue(publishableStatus is SupabaseConfigStatus.Configured)
 
         val forbiddenStatus = SupabaseClientProvider.inspectConfig(
             rawUrl = "https://xyz.supabase.co",
@@ -325,20 +337,26 @@ class OccasioNetSecurityAndDomainTest {
         assertEquals(12, SupabaseSchemaContract.REQUIRED_TABLES.size)
         assertEquals(7, SupabaseSchemaContract.REQUIRED_RPCS.size)
 
-        // التحقق من وجود ملفات SQL ومطابقتها لأسماء الجداول والدوال
+        // التحقق من ملفات Supabase CLI ذات الطابع الزمني ومطابقة الجداول والدوال
         val rootDir = File("..").takeIf { File("../supabase/migrations").exists() } ?: File(".")
-        val schemaFile = File(rootDir, "supabase/migrations/001_schema.sql")
-        val funcFile = File(rootDir, "supabase/migrations/002_functions.sql")
-        if (schemaFile.exists() && funcFile.exists()) {
-            val schemaSql = schemaFile.readText()
-            val funcSql = funcFile.readText()
-            SupabaseSchemaContract.REQUIRED_TABLES.forEach { table ->
-                assertTrue("الجدول $table يجب أن يكون معرفاً في 001_schema.sql", schemaSql.contains("public.$table"))
-            }
-            SupabaseSchemaContract.REQUIRED_RPCS.forEach { rpc ->
-                assertTrue("الدالة $rpc يجب أن تكون معرفة في 002_functions.sql", funcSql.contains("public.$rpc"))
-            }
+        val migrationsDir = File(rootDir, "supabase/migrations")
+        val migrations = migrationsDir.listFiles { file -> file.extension == "sql" }?.sortedBy { it.name }.orEmpty()
+        assertEquals("يجب أن توجد أربع ترحيلات مرتبة", 4, migrations.size)
+        val schemaSql = migrations.first { it.name.endsWith("_schema.sql") }.readText()
+        val funcSql = migrations.first { it.name.endsWith("_functions.sql") }.readText()
+        SupabaseSchemaContract.REQUIRED_TABLES.forEach { table ->
+            assertTrue("الجدول $table يجب أن يكون معرفاً في الترحيل الأساسي", schemaSql.contains("public.$table"))
         }
+        SupabaseSchemaContract.REQUIRED_RPCS.forEach { rpc ->
+            assertTrue("الدالة $rpc يجب أن تكون معرفة في ترحيل الدوال", funcSql.contains("public.$rpc"))
+        }
+    }
+
+    @Test
+    fun `publishable API key is never sent as a Bearer JWT`() {
+        assertNull(authorizationHeaderForApiKey("sb_publishable_public-example", null))
+        assertEquals("Bearer user-access-token", authorizationHeaderForApiKey("sb_publishable_public-example", "user-access-token"))
+        assertEquals("Bearer legacy-anon-jwt", authorizationHeaderForApiKey("legacy-anon-jwt", null))
     }
 
     @Test

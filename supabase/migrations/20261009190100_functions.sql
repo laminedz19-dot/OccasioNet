@@ -69,6 +69,23 @@ CREATE TRIGGER on_auth_user_created
     AFTER INSERT OR UPDATE OF email_confirmed_at ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
+-- Rattacher les comptes Auth déjà présents avant l’installation du schéma.
+-- Les profils/rôles existants ne sont jamais écrasés et aucun rôle admin n’est attribué.
+INSERT INTO public.profiles (id, email, full_name, phone, email_confirmed)
+SELECT
+    u.id,
+    COALESCE(u.email, ''),
+    COALESCE(u.raw_user_meta_data->>'full_name', ''),
+    COALESCE(u.raw_user_meta_data->>'phone', ''),
+    u.email_confirmed_at IS NOT NULL
+FROM auth.users AS u
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.user_roles (user_id, role)
+SELECT u.id, 'user'
+FROM auth.users AS u
+ON CONFLICT (user_id) DO NOTHING;
+
 -- 3. دالة إنشاء طلب دفع جديد (تفرض السعر الخادمي الرسمي من app_settings)
 CREATE OR REPLACE FUNCTION public.submit_payment_request(
     p_payment_method TEXT,

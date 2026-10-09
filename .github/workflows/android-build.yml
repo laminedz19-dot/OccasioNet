@@ -32,18 +32,7 @@ jobs:
       - name: 4. Setup Gradle with Caching
         uses: gradle/actions/setup-gradle@v4
 
-      - name: 5. Prepare Safe Environment File (No service_role secrets)
-        env:
-          SUPABASE_URL_SECRET: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY_SECRET: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          cp .env.example .env
-          if [ -n "$SUPABASE_URL_SECRET" ] && [ -n "$SUPABASE_ANON_KEY_SECRET" ]; then
-            echo "SUPABASE_URL=$SUPABASE_URL_SECRET" > .env
-            echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY_SECRET" >> .env
-          fi
-
-      - name: 6. Generate CI Debug Keystore
+      - name: 5. Generate CI Debug Keystore
         run: |
           if [ ! -f debug.keystore ]; then
             keytool -genkeypair -v \
@@ -57,29 +46,29 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: 7. Run Unit & Security Tests (15 Scenarios)
+      - name: 6. Run Unit & Security Tests (15 Scenarios)
         run: gradle :core:testDebugUnitTest :app:testDebugUnitTest
 
-      - name: 8. Build OccasioNet User APK (:userApp)
+      - name: 7. Build OccasioNet User APK (:userApp)
         run: |
           gradle :userApp:assembleDebug
           mkdir -p dist
           cp userApp/build/outputs/apk/debug/userApp-debug.apk dist/OccasioNet-User-debug.apk
 
-      - name: 9. Build OccasioNet Admin APK (:adminApp)
+      - name: 8. Build OccasioNet Admin APK (:adminApp)
         run: |
           gradle :adminApp:assembleDebug
           mkdir -p dist
           cp adminApp/build/outputs/apk/debug/adminApp-debug.apk dist/OccasioNet-Admin-debug.apk
 
-      - name: 10. Upload OccasioNet-User-debug.apk Artifact
+      - name: 9. Upload OccasioNet-User-debug.apk Artifact
         uses: actions/upload-artifact@v4
         with:
           name: OccasioNet-User-debug-apk
           path: dist/OccasioNet-User-debug.apk
           if-no-files-found: error
 
-      - name: 11. Upload OccasioNet-Admin-debug.apk Artifact
+      - name: 10. Upload OccasioNet-Admin-debug.apk Artifact
         uses: actions/upload-artifact@v4
         with:
           name: OccasioNet-Admin-debug-apk

@@ -188,7 +188,10 @@ class UserViewModel(
             _isBusy.value = false
             res.onSuccess { msg ->
                 _feedbackBanner.value = msg
-                navigateTo(UserScreenRoute.HOME)
+                navigateTo(
+                    if (repository.currentUser.value == null) UserScreenRoute.EMAIL_CONFIRMATION
+                    else UserScreenRoute.HOME
+                )
             }.onFailure { err ->
                 _feedbackBanner.value = err.message ?: "فشل إنشاء الحساب."
             }

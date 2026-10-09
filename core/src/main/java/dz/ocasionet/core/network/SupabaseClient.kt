@@ -10,6 +10,11 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.util.concurrent.TimeUnit
 
+internal fun authorizationHeaderForApiKey(apiKey: String, accessToken: String?): String? {
+    accessToken?.takeIf { it.isNotBlank() }?.let { return "Bearer $it" }
+    return if (apiKey.startsWith("sb_publishable_")) null else "Bearer $apiKey"
+}
+
 /**
  * تهيئة عميل Supabase المشترك في وحدة `:core` باستخدام متغيرات البيئة:
  * - `SUPABASE_URL` أو `URL`
@@ -73,6 +78,8 @@ object SupabaseClient {
         val clean = value.trim()
         return clean.isEmpty() ||
             clean.contains("UNCONFIGURED", ignoreCase = true) ||
+            clean.contains("REPLACE_WITH", ignoreCase = true) ||
+            clean.contains("CHANGEME", ignoreCase = true) ||
             clean.contains("your-project-ref", ignoreCase = true)
     }
 
@@ -122,11 +129,11 @@ object SupabaseClient {
         }
 
         val authInterceptor = Interceptor { chain ->
-            val token = currentAccessToken?.takeIf { it.isNotBlank() } ?: anonKey
-            val req = chain.request().newBuilder()
-                .header("apikey", anonKey)
-                .header("Authorization", "Bearer $token")
-                .build()
+            val reqBuilder = chain.request().newBuilder().header("apikey", anonKey)
+            val authorization = authorizationHeaderForApiKey(anonKey, currentAccessToken)
+            if (authorization == null) reqBuilder.removeHeader("Authorization")
+            else reqBuilder.header("Authorization", authorization)
+            val req = reqBuilder.build()
             chain.proceed(req)
         }
 

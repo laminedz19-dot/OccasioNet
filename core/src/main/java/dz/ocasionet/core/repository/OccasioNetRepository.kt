@@ -81,7 +81,10 @@ class OccasioNetRepository {
                 val st = _configStatus.value as SupabaseConfigStatus.ForbiddenServiceRoleKey
                 _publicListingsState.value = ResourceState.Error(st.reasonAr, isNetworkError = false)
             } else {
-                _publicListingsState.value = ResourceState.Success(emptyList())
+                _publicListingsState.value = ResourceState.Error(
+                    "لم يتم إعداد اتصال Supabase بعد. أضف رابط المشروع والمفتاح العام في ملف البيئة المحلي.",
+                    isNetworkError = false
+                )
             }
             return
         }
@@ -143,134 +146,66 @@ class OccasioNetRepository {
         val cleanEmail = email.trim()
         val cleanName = fullName.trim()
         val cleanPhone = phone.trim()
-
         val service = requireConfiguredService()
-        if (service == null) {
-            _currentUser.value = UserProfile(
-                id = "user-${cleanEmail.hashCode().toUInt()}",
-                email = cleanEmail,
-                fullName = cleanName,
-                phone = cleanPhone,
-                wilayaCode = 16,
-                communeId = 1601,
-                isBanned = false
-            )
-            return@executeSingleFlight Result.success("تم إنشاء الحساب وتسجيل الدخول مباشرة بنجاح.")
-        }
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
 
-        val resp = service.signUp(
+        val response = service.signUp(
             AuthSignUpRequest(
                 email = cleanEmail,
                 password = password,
                 data = mapOf("full_name" to cleanName, "phone" to cleanPhone)
             )
         )
-        val body = if (resp.isSuccessful) resp.body() else null
-        if (body?.accessToken != null && body.user != null) {
-            SupabaseClientProvider.currentAccessToken = body.accessToken
-            val loaded = loadAuthenticatedUserProfile(body.user.id)
-            if (loaded == null) {
-                _currentUser.value = UserProfile(
-                    id = body.user.id,
-                    email = cleanEmail,
-                    fullName = cleanName,
-                    phone = cleanPhone,
-                    wilayaCode = 16,
-                    communeId = 1601,
-                    isBanned = false
-                )
-            }
-            return@executeSingleFlight Result.success("تم إنشاء الحساب وتسجيل الدخول مباشرة بنجاح.")
-        }
-
-        // في حال أعاد الخادم 429 (تجاوز حد رسائل البريد في Supabase) أو لم يرجع رمز جلسة بسبب تعطيل OTP:
-        val loginResp = try {
-            service.signInWithPassword(AuthSignInRequest(cleanEmail, password))
-        } catch (_: Exception) {
-            null
-        }
-        val session = if (loginResp?.isSuccessful == true) loginResp.body() else null
-        if (session?.accessToken != null && session.user != null) {
-            SupabaseClientProvider.currentAccessToken = session.accessToken
-            val loaded = loadAuthenticatedUserProfile(session.user.id)
-            if (loaded == null) {
-                _currentUser.value = UserProfile(
-                    id = session.user.id,
-                    email = cleanEmail,
-                    fullName = cleanName,
-                    phone = cleanPhone,
-                    wilayaCode = 16,
-                    communeId = 1601,
-                    isBanned = false
-                )
-            }
-        } else {
-            _currentUser.value = UserProfile(
-                id = body?.user?.id ?: "user-${cleanEmail.hashCode().toUInt()}",
-                email = cleanEmail,
-                fullName = cleanName,
-                phone = cleanPhone,
-                wilayaCode = 16,
-                communeId = 1601,
-                isBanned = false
+        if (!response.isSuccessful) {
+            val detail = try { response.errorBody()?.string().orEmpty() } catch (_: Exception) { "" }
+            return@executeSingleFlight Result.failure(
+                IllegalStateException("تعذر إنشاء الحساب (${response.code()}): ${detail.take(240)}")
             )
         }
-        Result.success("تم إنشاء الحساب وتسجيل الدخول مباشرة بنجاح.")
+
+        val session = response.body()
+        val accessToken = session?.accessToken
+        val authUser = session?.user
+        if (authUser == null) {
+            return@executeSingleFlight Result.failure(
+                IllegalStateException("نجح رد الخادم دون إرجاع مستخدم؛ لم يتم تأكيد إنشاء الحساب بشكل موثوق.")
+            )
+        }
+        if (accessToken.isNullOrBlank()) {
+            _currentUser.value = null
+            return@executeSingleFlight Result.success(
+                "تم إنشاء الحساب. يرجى تأكيد بريدك الإلكتروني ثم تسجيل الدخول."
+            )
+        }
+
+        SupabaseClientProvider.currentAccessToken = accessToken
+        val profile = loadAuthenticatedUserProfile(authUser.id) ?: UserProfile(
+            id = authUser.id,
+            email = authUser.email ?: cleanEmail,
+            fullName = cleanName,
+            phone = cleanPhone
+        )
+        _currentUser.value = profile
+        Result.success("تم إنشاء الحساب وتسجيل الدخول بنجاح.")
     }
 
     suspend fun signInUser(email: String, password: String): Result<UserProfile> = executeSingleFlight {
         val cleanEmail = email.trim()
         val service = requireConfiguredService()
-        if (service == null) {
-            val profile = UserProfile(
-                id = "user-${cleanEmail.hashCode().toUInt()}",
-                email = cleanEmail,
-                fullName = cleanEmail.substringBefore("@"),
-                phone = "",
-                wilayaCode = 16,
-                communeId = 1601,
-                isBanned = false
-            )
-            _currentUser.value = profile
-            return@executeSingleFlight Result.success(profile)
-        }
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
 
         val resp = service.signInWithPassword(AuthSignInRequest(cleanEmail, password))
         if (!resp.isSuccessful) {
             val errBody = try { resp.errorBody()?.string().orEmpty() } catch (_: Exception) { "" }
-            // إذا كان الخطأ بسبب 429 أو عدم تأكيد البريد الإلكتروني (email_not_confirmed)، نسجل دخول المستخدم مباشرة دون OTP
-            if (resp.code() == 429 || errBody.contains("email_not_confirmed", ignoreCase = true) || resp.code() == 400) {
-                val fallbackProfile = UserProfile(
-                    id = "user-${cleanEmail.hashCode().toUInt()}",
-                    email = cleanEmail,
-                    fullName = cleanEmail.substringBefore("@"),
-                    phone = "",
-                    wilayaCode = 16,
-                    communeId = 1601,
-                    isBanned = false
-                )
-                _currentUser.value = fallbackProfile
-                return@executeSingleFlight Result.success(fallbackProfile)
-            }
             return@executeSingleFlight Result.failure(
-                IllegalStateException("بيانات الدخول غير صحيحة (${resp.code()}). تحقق من البريد الإلكتروني وكلمة المرور.")
+                IllegalStateException("تعذر تسجيل الدخول (${resp.code()}): ${errBody.take(240)}")
             )
         }
         val session = resp.body()
         val token = session?.accessToken
         val userDto = session?.user
         if (token.isNullOrBlank() || userDto == null) {
-            val fallbackProfile = UserProfile(
-                id = "user-${cleanEmail.hashCode().toUInt()}",
-                email = cleanEmail,
-                fullName = cleanEmail.substringBefore("@"),
-                phone = "",
-                wilayaCode = 16,
-                communeId = 1601,
-                isBanned = false
-            )
-            _currentUser.value = fallbackProfile
-            return@executeSingleFlight Result.success(fallbackProfile)
+            return@executeSingleFlight Result.failure(IllegalStateException("لم يُرجع Supabase جلسة مصادقة صالحة."))
         }
         SupabaseClientProvider.currentAccessToken = token
         val profile = loadAuthenticatedUserProfile(userDto.id) ?: UserProfile(
@@ -371,14 +306,7 @@ class OccasioNetRepository {
                 _currentUser.value = updated
                 Result.success(updated)
             } else {
-                val localUpdated = user.copy(
-                    fullName = fullName.trim(),
-                    phone = phone.trim(),
-                    wilayaCode = wilayaCode ?: user.wilayaCode,
-                    communeId = communeId ?: user.communeId
-                )
-                _currentUser.value = localUpdated
-                Result.success(localUpdated)
+                Result.failure(IllegalStateException("تعذر حفظ الملف الشخصي (${resp.code()})."))
             }
         }
 
@@ -403,55 +331,32 @@ class OccasioNetRepository {
         val storagePath = "${user.id}/${System.currentTimeMillis()}_$safeName"
 
         val service = requireConfiguredService()
-        if (service != null) {
-            val uploadResp = try {
-                service.uploadStorageObject(
-                    bucket = "payment-receipts",
-                    objectPath = storagePath,
-                    mimeType = mimeType,
-                    fileBody = fileBytes.toRequestBody(mimeType.toMediaTypeOrNull())
-                )
-            } catch (_: Exception) {
-                null
-            }
-
-            if (uploadResp?.isSuccessful == true) {
-                val rpcResp = try {
-                    service.rpcSubmitPaymentRequest(
-                        SubmitPaymentRpcBody(
-                            paymentMethod = paymentMethod,
-                            receiptStoragePath = storagePath,
-                            receiptMimeType = mimeType,
-                            receiptSizeBytes = sizeBytes,
-                            transactionReference = transactionReference.trim(),
-                            userNote = userNote.trim()
-                        )
-                    )
-                } catch (_: Exception) {
-                    null
-                }
-                if (rpcResp?.isSuccessful == true) {
-                    refreshUserPrivateData()
-                    return@executeSingleFlight Result.success(rpcResp.body() ?: "")
-                }
-            }
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+        val uploadResp = service.uploadStorageObject(
+            bucket = "payment-receipts",
+            objectPath = storagePath,
+            mimeType = mimeType,
+            fileBody = fileBytes.toRequestBody(mimeType.toMediaTypeOrNull())
+        )
+        if (!uploadResp.isSuccessful) {
+            return@executeSingleFlight Result.failure(IllegalStateException("فشل رفع إيصال الدفع (${uploadResp.code()})."))
         }
 
-        val fallbackId = "pay-${System.currentTimeMillis()}"
-        val fallbackItem = PaymentRequestItem(
-            id = fallbackId,
-            userId = user.id,
-            amountDzd = _appSettings.value.listingFeeDzd,
-            paymentMethod = paymentMethod,
-            receiptStoragePath = storagePath,
-            receiptMimeType = mimeType,
-            receiptSizeBytes = sizeBytes,
-            transactionReference = transactionReference.trim(),
-            userNote = userNote.trim(),
-            status = "pending"
+        val rpcResp = service.rpcSubmitPaymentRequest(
+            SubmitPaymentRpcBody(
+                paymentMethod = paymentMethod,
+                receiptStoragePath = storagePath,
+                receiptMimeType = mimeType,
+                receiptSizeBytes = sizeBytes,
+                transactionReference = transactionReference.trim(),
+                userNote = userNote.trim()
+            )
         )
-        _myPaymentRequests.value = listOf(fallbackItem) + _myPaymentRequests.value
-        Result.success(fallbackId)
+        if (!rpcResp.isSuccessful) {
+            return@executeSingleFlight Result.failure(IllegalStateException("تعذر تسجيل طلب الدفع (${rpcResp.code()})."))
+        }
+        refreshUserPrivateData()
+        Result.success(rpcResp.body() ?: "")
     }
 
     suspend fun publishListingWithApprovedReceipt(
@@ -471,52 +376,26 @@ class OccasioNetRepository {
             return@executeSingleFlight Result.failure(IllegalArgumentException("البلدية المختارة لا تتبع الولاية المحددة."))
         }
         val service = requireConfiguredService()
-        if (service != null) {
-            val rpcResp = try {
-                service.rpcCreateListingWithPaidReceipt(
-                    CreateListingRpcBody(
-                        paymentRequestId = paymentRequestId,
-                        categoryId = categoryId,
-                        wilayaCode = wilayaCode,
-                        communeId = communeId,
-                        title = title.trim(),
-                        description = description.trim(),
-                        priceDzd = priceDzd,
-                        condition = condition,
-                        contactPhone = contactPhone.trim()
-                    )
-                )
-            } catch (_: Exception) {
-                null
-            }
-            if (rpcResp?.isSuccessful == true) {
-                refreshPublicData()
-                refreshUserPrivateData()
-                return@executeSingleFlight Result.success(rpcResp.body() ?: "")
-            }
-        }
-
-        val newListing = ListingItem(
-            id = "lst-${System.currentTimeMillis()}",
-            sellerId = user.id,
-            paymentRequestId = paymentRequestId,
-            categoryId = categoryId,
-            wilayaCode = wilayaCode,
-            communeId = communeId,
-            title = title.trim(),
-            description = description.trim(),
-            priceDzd = priceDzd,
-            condition = condition,
-            status = "published",
-            contactPhone = contactPhone.trim()
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+        val rpcResp = service.rpcCreateListingWithPaidReceipt(
+            CreateListingRpcBody(
+                paymentRequestId = paymentRequestId,
+                categoryId = categoryId,
+                wilayaCode = wilayaCode,
+                communeId = communeId,
+                title = title.trim(),
+                description = description.trim(),
+                priceDzd = priceDzd,
+                condition = condition,
+                contactPhone = contactPhone.trim()
+            )
         )
-        _myListings.value = listOf(newListing) + _myListings.value
-        _myPaymentRequests.value = _myPaymentRequests.value.map {
-            if (it.id == paymentRequestId) it.copy(status = "consumed", consumedListingId = newListing.id) else it
+        if (!rpcResp.isSuccessful) {
+            return@executeSingleFlight Result.failure(IllegalStateException("تعذر نشر الإعلان (${rpcResp.code()})."))
         }
-        val currentPublic = (_publicListingsState.value as? ResourceState.Success)?.data.orEmpty()
-        _publicListingsState.value = ResourceState.Success(listOf(newListing) + currentPublic)
-        Result.success(newListing.id)
+        refreshPublicData()
+        refreshUserPrivateData()
+        Result.success(rpcResp.body() ?: "")
     }
 
     suspend fun updateMyListingStatusOrDetails(

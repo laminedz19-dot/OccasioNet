@@ -189,7 +189,7 @@ class AdminRepository {
             val service = requireConfiguredService()
                 ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
             val resp = service.rpcAdminSetUserBanStatus(AdminBanUserRpcBody(targetUserId, isBanned, reason))
-            if (resp.isSuccessful) {
+            if (resp.isSuccessful && resp.body() == true) {
                 refreshAdminDashboardData()
                 Result.success(true)
             } else {
@@ -216,7 +216,7 @@ class AdminRepository {
                 paymentNoticeAr = paymentNoticeAr
             )
         )
-        if (resp.isSuccessful) {
+        if (resp.isSuccessful && resp.body() == true) {
             refreshAdminDashboardData()
             Result.success(true)
         } else {
@@ -232,7 +232,7 @@ class AdminRepository {
             val service = requireConfiguredService()
                 ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
             val resp = service.rpcAdminModerateListing(AdminModerateListingRpcBody(listingId, newStatus, reason))
-            if (resp.isSuccessful) {
+            if (resp.isSuccessful && resp.body() == true) {
                 refreshAdminDashboardData()
                 Result.success(true)
             } else {
