@@ -160,6 +160,33 @@ CREATE POLICY "audit_logs_select_admin_only"
 -- 2) listing-images (PUBLIC read bucket, owner write in own folder, max 5MB)
 -- =============================================================================
 
+-- لا تغيّر خصائص Bucket موجود بصمت؛ إذا وُجد إعداد مختلف أوقف الترحيل للمراجعة.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM storage.buckets
+        WHERE id = 'payment-receipts'
+          AND (name IS DISTINCT FROM 'payment-receipts'
+               OR public IS TRUE
+               OR file_size_limit IS DISTINCT FROM 5242880
+               OR allowed_mime_types IS DISTINCT FROM ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']::text[])
+    ) THEN
+        RAISE EXCEPTION 'BUCKET_REVIEW_REQUIRED: payment-receipts exists with different security settings.';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM storage.buckets
+        WHERE id = 'listing-images'
+          AND (name IS DISTINCT FROM 'listing-images'
+               OR public IS NOT TRUE
+               OR file_size_limit IS DISTINCT FROM 5242880
+               OR allowed_mime_types IS DISTINCT FROM ARRAY['image/jpeg', 'image/png', 'image/webp']::text[])
+    ) THEN
+        RAISE EXCEPTION 'BUCKET_REVIEW_REQUIRED: listing-images exists with different security settings.';
+    END IF;
+END;
+$$;
+
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
     'payment-receipts',
@@ -168,10 +195,7 @@ VALUES (
     5242880,
     ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
 )
-ON CONFLICT (id) DO UPDATE
-SET public = FALSE,
-    file_size_limit = 5242880,
-    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
@@ -181,10 +205,7 @@ VALUES (
     5242880,
     ARRAY['image/jpeg', 'image/png', 'image/webp']
 )
-ON CONFLICT (id) DO UPDATE
-SET public = TRUE,
-    file_size_limit = 5242880,
-    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp'];
+ON CONFLICT (id) DO NOTHING;
 
 -- سياسات Storage لـ payment-receipts (خاص)
 DROP POLICY IF EXISTS "receipts_insert_own_folder" ON storage.objects;

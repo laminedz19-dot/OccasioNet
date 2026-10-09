@@ -356,6 +356,8 @@ class OccasioNetSecurityAndDomainTest {
         assertTrue("تحديث المستخدم غير الموجود يجب أن يفشل", funcSql.contains("USER_NOT_FOUND"))
         assertTrue("الإعلان غير الموجود يجب ألا ينجح إشرافه", funcSql.contains("LISTING_NOT_FOUND"))
         assertTrue("إدراج البلاغ يجب ألا يمنح العميل أعمدة المراجعة", rlsSql.contains("GRANT INSERT (listing_id, reporter_id, reason, details) ON public.reports"))
+        assertTrue("إعداد Bucket غير المتوقع يجب أن يوقف الترحيل للمراجعة", rlsSql.contains("BUCKET_REVIEW_REQUIRED"))
+        assertFalse("لا ينبغي إعادة ضبط خصائص Bucket موجود بصمت", rlsSql.contains("ON CONFLICT (id) DO UPDATE"))
     }
 
     @Test
