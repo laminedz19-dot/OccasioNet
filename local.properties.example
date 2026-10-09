@@ -1,0 +1,9 @@
+# ملف إرشادي للإعداد المحلي (local.properties.example)
+# ملاحظة: لا ترفع ملف local.properties أو .env الحقيقي إلى Git.
+# في بيئة AI Studio، يتم حقن المتغيرات بأمان عبر لوحة Secrets وملف .env.
+#
+# SUPABASE_URL=
+# SUPABASE_ANON_KEY=
+#
+# تحذير أمني صارم:
+# لا تضع مفتاح SUPABASE_SERVICE_ROLE_KEY داخل أي ملف إعداد خاص بـ Android أو داخل APK.

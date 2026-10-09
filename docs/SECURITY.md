@@ -1,0 +1,19 @@
+# توثيق الأمان وسياسات RLS (docs/SECURITY.md)
+
+## 1. المبادئ الأمنية الصارمة
+1. **منع مفتاح `service_role` في Android**: يستخدم كلا التطبيقين (`userApp` و `adminApp`) المفتاح العام (`SUPABASE_ANON_KEY`) فقط، ويرفض `SupabaseClientProvider` التشغيل إذا اكتشف مفتاح `service_role`.
+2. **فصل الأدوار الإدارية**: يتم تخزين الأدوار في جدول مستقل `public.user_roles` لا يملك العميل عليه أي صلاحية `INSERT` أو `UPDATE` أو `DELETE`.
+3. **التحقق الخادمي من المشرف**: تتحقق دالة `public.is_admin()` في PostgreSQL من أن `auth.uid()` مسجل بدور `'admin'` في `public.user_roles` وأن حسابه غير محظور (`is_banned = false`).
+4. **حماية الدوال ذات الصلاحيات المرتفعة (`SECURITY DEFINER`)**: جميع الدوال الخادمية تضبط `SET search_path = public, pg_temp` وتلغي صلاحيات التنفيذ العامة `REVOKE ALL ... FROM PUBLIC`.
+
+## 2. حماية نظام الدفع ونشر الإعلانات (500 دج)
+- يتم جلب سعر نشر الإعلان خادمياً من `public.app_settings` داخل دالة `submit_payment_request` لمنع أي تلاعب بالسعر من جهة العميل.
+- لا يملك العميل صلاحية `UPDATE` على جدول `payment_requests`، لذا لا يستطيع المستخدم الموافقة على دفعته.
+- تمنع دالة `review_payment_request` المشرف أو المستخدم من الموافقة على طلب دفع يخصه (`SELF_APPROVAL_FORBIDDEN`).
+- تستخدم دالة `create_listing_with_paid_receipt` قفل الصفوف `SELECT ... FOR UPDATE` لمنع الاستهلاك المزدوج للدفعة نفسها حتى في حال إرسال طلبين متزامنين في اللحظة نفسها.
+
+## 3. حماية ملفات الإيصالات (Supabase Storage)
+- حاوية `payment-receipts` خاصة تماماً (`public = false`).
+- يُجبر المستخدم على الرفع داخل مجلده الخاص `{user_id}/...` فقط.
+- لا يمكن لأي مستخدم قراءة إيصالات مستخدم آخر.
+- يستعرض المشرف الإيصالات عبر روابط موقعة قصيرة الصلاحية (120 ثانية) فقط.

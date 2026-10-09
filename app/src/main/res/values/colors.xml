@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="royal_indigo_primary">#FF3730A3</color>
+    <color name="terracotta_secondary">#FFEA580C</color>
+    <color name="mediterranean_teal_tertiary">#FF0D9488</color>
+    <color name="warm_ivory_background">#FFFFFBF7</color>
+    <color name="crimson_admin_primary">#FFF43F5E</color>
+    <color name="obsidian_admin_background">#FF120F1D</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

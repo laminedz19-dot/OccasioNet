@@ -1,0 +1,6 @@
+{
+  "name": "OccasioNet",
+  "description": "منصة OccasioNet لبيع وشراء الأشياء المستعملة في الجزائر (تطبيق المستخدم OccasioNet User وتطبيق الإدارة OccasioNet Admin) باستخدام Kotlin وJetpack Compose وSupabase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
