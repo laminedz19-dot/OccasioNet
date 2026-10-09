@@ -17,8 +17,8 @@ internal fun authorizationHeaderForApiKey(apiKey: String, accessToken: String?):
 
 /**
  * تهيئة عميل Supabase المشترك في وحدة `:core` باستخدام متغيرات البيئة:
- * - `SUPABASE_URL` أو `URL`
- * - `SUPABASE_ANON_KEY` أو `ANON_KEY`
+ * - `SUPABASE_URL`
+ * - `SUPABASE_ANON_KEY` (anon/publishable public key)
  *
  * يتيح استخدام عميل موحّد (Singleton) في جميع وحدات التطبيق (`:core`, `:userApp`, `:adminApp`, `:app`).
  */
@@ -36,31 +36,11 @@ object SupabaseClient {
     @Volatile
     private var cachedAnonKey: String? = null
 
-    /**
-     * قراءة رابط مشروع Supabase من متغيرات البيئة (`SUPABASE_URL` أو `URL`).
-     */
     val supabaseUrl: String
-        get() {
-            val primary = BuildConfig.SUPABASE_URL.trim()
-            return if (isPlaceholder(primary)) {
-                BuildConfig.URL.trim()
-            } else {
-                primary
-            }
-        }
+        get() = BuildConfig.SUPABASE_URL.trim()
 
-    /**
-     * قراءة المفتاح العام `ANON_KEY` من متغيرات البيئة (`SUPABASE_ANON_KEY` أو `ANON_KEY`).
-     */
     val supabaseAnonKey: String
-        get() {
-            val primary = BuildConfig.SUPABASE_ANON_KEY.trim()
-            return if (isPlaceholder(primary)) {
-                BuildConfig.ANON_KEY.trim()
-            } else {
-                primary
-            }
-        }
+        get() = BuildConfig.SUPABASE_ANON_KEY.trim()
 
     /**
      * التحقق مما إذا كانت إعدادات الاتصال مهيأة وصحيحة.
