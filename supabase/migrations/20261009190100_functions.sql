@@ -136,6 +136,17 @@ BEGIN
         RAISE EXCEPTION 'INVALID_SIZE: حجم الملف يتجاوز الحد المسموح به (5 ميجابايت).';
     END IF;
 
+    -- لا تثق في مسار/حجم يرسله العميل وحده؛ يجب أن يكون الملف قد رُفع فعليًا.
+    IF NOT EXISTS (
+        SELECT 1
+        FROM storage.objects AS o
+        WHERE o.bucket_id = 'payment-receipts'
+          AND o.name = p_receipt_storage_path
+          AND (storage.foldername(o.name))[1] = v_uid::text
+    ) THEN
+        RAISE EXCEPTION 'RECEIPT_NOT_FOUND: لم يُعثر على إيصال مرفوع لهذا المستخدم.';
+    END IF;
+
     -- جلب السعر الخادمي الرسمي من إعدادات التطبيق (لا يعتمد على قيمة من العميل)
     SELECT listing_fee_dzd INTO v_fee_dzd
     FROM public.app_settings
@@ -434,6 +445,10 @@ BEGIN
         updated_at = NOW()
     WHERE id = p_target_user_id;
 
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'USER_NOT_FOUND: المستخدم المطلوب غير موجود.';
+    END IF;
+
     INSERT INTO public.audit_logs (actor_id, action_type, target_table, target_id, metadata)
     VALUES (
         auth.uid(),
@@ -518,6 +533,10 @@ BEGIN
     SET status = p_new_status,
         updated_at = NOW()
     WHERE id = p_listing_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'LISTING_NOT_FOUND: الإعلان المطلوب غير موجود.';
+    END IF;
 
     INSERT INTO public.audit_logs (actor_id, action_type, target_table, target_id, metadata)
     VALUES (

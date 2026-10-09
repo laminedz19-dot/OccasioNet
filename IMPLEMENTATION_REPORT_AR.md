@@ -35,7 +35,7 @@
 - `core/src/test/.../OccasioNetSecurityAndDomainTest.kt`: اختبار مفتاح publishable، placeholders، وأسماء ملفات الترحيل المؤرخة.
 - `.env.example`: عنوان مشروع OccasioNet المتحقق ومفتاح placeholder فقط؛ لا يحتوي مفتاحًا حقيقيًا. `.env` مستثنى من Git.
 - `.github/workflows/android-build.yml`: إزالة الحاجة إلى Supabase secrets في CI.
-- `supabase/migrations/`: إعادة تسمية الترحيلات الأربع إلى أسماء زمنية، إضافة backfill آمن للحسابات الحالية بلا ترقية إلى admin، وقيود grants إضافية. أضيف `supabase/config.toml`.
+- `supabase/migrations/`: إعادة تسمية الترحيلات الأربع إلى أسماء زمنية، إضافة backfill آمن للحسابات الحالية بلا ترقية إلى admin، وقيود grants إضافية. خلال مراجعة PR أضيف تحقق RPC من وجود إيصال مرفوع فعليًا، ومن وجود سجل المستخدم/الإعلان قبل إرجاع نجاح إداري. أضيف `supabase/config.toml`.
 - أضيفت أدلة الإعداد اليدوي والاختبار والأمن، وعُدّلت مستندات README والنشر/قاعدة البيانات.
 
 ## 3. مخطط البيانات والأمان
