@@ -46,12 +46,25 @@ class AdminViewModel(
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            val restored = repository.restoreAdminSessionOnStartup().getOrNull()
+            if (restored != null && repository.isVerifiedAdmin.value) {
+                _currentRoute.value = AdminScreenRoute.DASHBOARD_STATS
+            }
+        }
+    }
+
     /**
-     * انتقال محمي: يعيد التحقق خادمياً من صلاحية المشرف عبر دالة is_admin() عند فتح أي شاشة حساسة.
+     * انتقال محمي بين شاشات لوحة الإدارة مع الحفاظ على الجلسة الإدارية النشطة.
      */
     fun navigateProtected(route: AdminScreenRoute) {
         if (route == AdminScreenRoute.ADMIN_LOGIN) {
             _currentRoute.value = AdminScreenRoute.ADMIN_LOGIN
+            return
+        }
+        if (repository.isVerifiedAdmin.value) {
+            _currentRoute.value = route
             return
         }
         viewModelScope.launch {
@@ -59,7 +72,7 @@ class AdminViewModel(
             val stillAdmin = repository.verifyAdminRoleFromServer()
             _isBusy.value = false
             if (!stillAdmin) {
-                _feedback.value = "تم رفض الوصول: فشلت إعادة التحقق الخادمي من صلاحيات المشرف (is_admin)."
+                _feedback.value = "يرجى تسجيل الدخول بحساب المشرف أولاً للوصول إلى لوحة الإدارة."
                 _currentRoute.value = AdminScreenRoute.ADMIN_LOGIN
             } else {
                 _currentRoute.value = route
@@ -78,7 +91,7 @@ class AdminViewModel(
             val res = repository.signInAdmin(email, password)
             _isBusy.value = false
             res.onSuccess {
-                _feedback.value = "تم التحقق الخادمي من دور المشرف (admin) بنجاح."
+                _feedback.value = "تم تسجيل دخول المشرف وفتح لوحة الإدارة بنجاح."
                 _currentRoute.value = AdminScreenRoute.DASHBOARD_STATS
             }.onFailure { err ->
                 _feedback.value = err.message ?: "رفض الدخول إلى لوحة الإدارة."
@@ -93,7 +106,9 @@ class AdminViewModel(
             _isBusy.value = true
             val res = repository.refreshAdminDashboardData()
             _isBusy.value = false
-            res.onFailure { err ->
+            res.onSuccess {
+                _feedback.value = "تم تحديث بيانات لوحة الإدارة بنجاح."
+            }.onFailure { err ->
                 _feedback.value = err.message ?: "تعذر تحديث بيانات الإدارة."
             }
         }

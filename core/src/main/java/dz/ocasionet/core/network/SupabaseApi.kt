@@ -169,7 +169,7 @@ interface SupabaseRestService {
     suspend fun updatePassword(@Body body: AuthPasswordUpdateRequest): Response<SupabaseAuthUserDto>
 
     @POST("auth/v1/logout")
-    suspend fun signOut(): Response<Unit>
+    suspend fun signOut(@Body body: Map<String, String> = emptyMap()): Response<Unit>
 
     // --- PostgREST Queries ---
     @GET("rest/v1/listings")
@@ -214,6 +214,11 @@ interface SupabaseRestService {
         @Query("order") order: String = "created_at.desc"
     ): Response<List<UserProfile>>
 
+    @GET("rest/v1/user_roles")
+    suspend fun getUserRoles(
+        @Query("user_id") userIdEq: String
+    ): Response<List<dz.ocasionet.core.model.UserRoleRecord>>
+
     @Headers("Prefer: return=representation")
     @PATCH("rest/v1/profiles")
     suspend fun updateOwnProfile(
@@ -257,7 +262,7 @@ interface SupabaseRestService {
 
     // --- Server-Side PostgreSQL RPCs ---
     @POST("rest/v1/rpc/is_admin")
-    suspend fun rpcIsAdmin(): Response<Boolean>
+    suspend fun rpcIsAdmin(@Body body: Map<String, String> = emptyMap()): Response<Boolean>
 
     @POST("rest/v1/rpc/submit_payment_request")
     suspend fun rpcSubmitPaymentRequest(@Body body: SubmitPaymentRpcBody): Response<String>

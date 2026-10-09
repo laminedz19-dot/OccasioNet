@@ -23,11 +23,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
@@ -123,7 +123,7 @@ fun OccasioNetAdminAppRoot(
                                 onClick = { adminViewModel.signOutAdmin() },
                                 modifier = Modifier.testTag("admin_logout_button")
                             ) {
-                                Icon(Icons.Default.ExitToApp, contentDescription = "تسجيل خروج المشرف")
+                                Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "تسجيل خروج المشرف")
                             }
                         }
                     }
@@ -347,6 +347,8 @@ fun AdminDashboardStatsScreen(viewModel: AdminViewModel) {
     val listings by viewModel.repository.adminAllListings.collectAsState()
     val reports by viewModel.repository.adminReports.collectAsState()
     val settings by viewModel.repository.appSettings.collectAsState()
+    val adminProfile by viewModel.repository.currentAdminProfile.collectAsState()
+    val roleDiagnostic by viewModel.repository.adminRoleDiagnostic.collectAsState()
     val summary = viewModel.repository.computeAdminFinancialSummary()
 
     LazyColumn(
@@ -357,6 +359,20 @@ fun AdminDashboardStatsScreen(viewModel: AdminViewModel) {
         item {
             Text("لوحة الإحصائيات والمراقبة المركزية", style = MaterialTheme.typography.headlineMedium)
             Text("رسم النشر الحالي: ${settings.listingFeeDzd} دج لكل إعلان")
+            if (adminProfile != null) {
+                Text(
+                    text = "المشرف الحالي: ${adminProfile?.email} • المعرّف: ${adminProfile?.id}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (!roleDiagnostic.isNullOrBlank()) {
+                Text(
+                    text = roleDiagnostic.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         item {
