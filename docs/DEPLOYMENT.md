@@ -23,15 +23,32 @@ supabase db push --dry-run
 
 ## 3. منح أول حساب دور الإدارة
 
-لا تسمح للتطبيق بمنح دور مشرف. بعد إنشاء حساب إداري والتحقق من UUID الصحيح يدويًا، يمكن للمالك تنفيذ إدراج واحد في SQL Editor. راجع UUID قبل التشغيل، ولا تستخدم بريدًا عامًا أو عنوانًا افتراضيًا:
+لا تسمح للتطبيق بمنح دور مشرف. ينشئ trigger دور `user` تلقائيًا لكل حساب جديد؛ لذلك لا تستخدم `INSERT ... ON CONFLICT DO NOTHING` لترقية حساب موجود، لأنه سيُبقي دوره `user`. على بيئة اختبار فقط، أنشئ حسابًا مخصصًا للمشرف وأكّد بريده، ثم تحقق يدويًا من UUID والدور والحظر:
 
 ```sql
-INSERT INTO public.user_roles (user_id, role)
-VALUES ('<UUID_OF_VERIFIED_ADMIN>', 'admin')
-ON CONFLICT (user_id) DO NOTHING;
+SELECT u.id, u.email, u.email_confirmed_at, r.role, p.is_banned
+FROM auth.users AS u
+JOIN public.user_roles AS r ON r.user_id = u.id
+JOIN public.profiles AS p ON p.id = u.id
+WHERE u.id = '<UUID_OF_VERIFIED_ADMIN>'::uuid;
 ```
 
-هذا الاستعلام لا يغيّر دورًا قائمًا تلقائيًا. لا تمنح دورًا إداريًا قبل التحقق من صاحب الحساب.
+لا تتابع إلا إذا كان هذا هو الحساب المقصود، و`email_confirmed_at` غير فارغ و`is_banned = false`. ثم نفّذ التحديث المقصور على UUID الذي راجعته، وتأكد أن `RETURNING` أعاد صفًا واحدًا:
+
+```sql
+UPDATE public.user_roles AS r
+SET role = 'admin', granted_at = NOW()
+FROM auth.users AS u
+JOIN public.profiles AS p ON p.id = u.id
+WHERE r.user_id = u.id
+  AND u.id = '<UUID_OF_VERIFIED_ADMIN>'::uuid
+  AND u.email_confirmed_at IS NOT NULL
+  AND p.is_banned = FALSE
+  AND r.role = 'user'
+RETURNING r.user_id, r.role;
+```
+
+نفّذ ذلك مرة واحدة فقط على حساب مخصص، من SQL Editor الموثوق؛ لا تستخدم بريدًا عامًا أو عنوانًا افتراضيًا. إذا لم يُعد صفًا، توقّف وافحص الحالة بدل توسيع شرط `WHERE`. SQL Editor يتجاوز RLS، فلا تستخدمه لإثبات أن سياسات RLS تعمل.
 
 ## 4. الوظائف الخادمية
 
