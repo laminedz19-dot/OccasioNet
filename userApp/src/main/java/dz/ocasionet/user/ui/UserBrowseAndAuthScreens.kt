@@ -97,12 +97,19 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OccasioNetUserAppRoot(
-    userViewModel: UserViewModel = viewModel()
+    userViewModel: UserViewModel = viewModel(),
+    initialDeepLinkUri: String? = null
 ) {
     val currentRoute by userViewModel.currentRoute.collectAsState()
     val currentUser by userViewModel.repository.currentUser.collectAsState()
     val feedback by userViewModel.feedbackBanner.collectAsState()
     val isBusy by userViewModel.isBusy.collectAsState()
+
+    LaunchedEffect(initialDeepLinkUri) {
+        if (!initialDeepLinkUri.isNullOrBlank()) {
+            userViewModel.handleAuthCallbackDeepLink(initialDeepLinkUri)
+        }
+    }
 
     BackHandler(
         enabled = currentRoute != UserScreenRoute.HOME &&
@@ -978,6 +985,22 @@ fun UserListingDetailsScreen(viewModel: UserViewModel) {
                     Text("البلدية: ${AlgeriaGeographyCatalog.getCommuneNameAr(listing.communeId)}")
                     Text("حالة المنتج: ${ListingCondition.fromDb(listing.condition).labelAr}")
                     Text("هاتف التواصل: ${listing.contactPhone.ifBlank { "متاح عند المراسلة" }}")
+                    if (listing.imageUrls.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            "صور الإعلان المرفقة (${listing.imageUrls.size}):",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        listing.imageUrls.forEachIndexed { idx, url ->
+                            Text(
+                                text = "• صورة #${idx + 1}: ${url.substringAfterLast('/')}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text("الوصف التفصيلي:", style = MaterialTheme.typography.titleMedium)
                     Text(listing.description, style = MaterialTheme.typography.bodyLarge)

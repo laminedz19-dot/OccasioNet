@@ -296,6 +296,29 @@ BEGIN
         RAISE EXCEPTION 'ACCOUNT_BANNED: حسابك موقوف ولا يمكنك نشر إعلانات.';
     END IF;
 
+    -- التحقق من تأكيد البريد الإلكتروني إذا كان الإعداد مفعلاً في app_settings
+    IF EXISTS (
+        SELECT 1 FROM public.app_settings WHERE id = 1 AND require_email_confirmation = TRUE
+    ) AND v_profile.email_confirmed IS NOT TRUE THEN
+        RAISE EXCEPTION 'EMAIL_NOT_CONFIRMED: يجب تأكيد البريد الإلكتروني أولاً قبل نشر إعلان.';
+    END IF;
+
+    -- التحقق الخادمي من صور الإعلان (إن وجدت): العدد الأقصى وأن كل مسار يخص مجلد المالك {auth.uid()}/
+    IF p_image_urls IS NOT NULL AND jsonb_typeof(p_image_urls) = 'array' THEN
+        IF jsonb_array_length(p_image_urls) > COALESCE((SELECT max_images_per_listing FROM public.app_settings WHERE id = 1), 5) THEN
+            RAISE EXCEPTION 'TOO_MANY_IMAGES: عدد صور الإعلان يتجاوز الحد الأقصى المسموح به.';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(p_image_urls) AS img_path
+            WHERE position(v_uid::text || '/' in img_path) <> 1
+              AND position('/storage/v1/object/public/listing-images/' || v_uid::text || '/' in img_path) = 0
+        ) THEN
+            RAISE EXCEPTION 'FORBIDDEN_IMAGE_PATH: جميع صور الإعلان يجب أن تقع داخل مجلد المستخدم المالك في listing-images.';
+        END IF;
+    END IF;
+
     -- التحقق من ارتباط البلدية بالولاية المختارة
     SELECT wilaya_code INTO v_commune_wilaya
     FROM public.communes

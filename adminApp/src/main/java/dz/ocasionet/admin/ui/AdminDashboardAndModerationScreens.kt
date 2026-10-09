@@ -438,6 +438,25 @@ fun AdminDashboardStatsScreen(viewModel: AdminViewModel) {
                 )
             }
         }
+
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "حالة الجاهزية الأمنية وتخزين الجلسات (DataStore + RLS)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Text("• التحقق الخادمي من دور المشرف: مفعّل عبر دالة is_admin() عند كل عملية حساسة")
+                    Text("• تشفير رموز الجلسة: محفوظة ومشفرة بـ AES/GCM داخل DataStoreRepository")
+                    Text("• إيصالات الدفع: محمية في حاوية payment-receipts بروابط مؤقتة قصيرة الصلاحية (120 ثانية)")
+                }
+            }
+        }
     }
 }
 

@@ -206,7 +206,22 @@ CREATE POLICY "receipts_select_own_or_admin"
         )
     );
 
--- سياسات Storage لـ listing-images (عام للقراءة، مقيد بمجلد المستخدم للرفع)
+-- سياسة الحذف التعويضي المحدود للإيصالات اليتيمة فقط (تمنع حذف أي إيصال مرتبط بطلب دفع قائم)
+DROP POLICY IF EXISTS "receipts_delete_unlinked_own_folder" ON storage.objects;
+CREATE POLICY "receipts_delete_unlinked_own_folder"
+    ON storage.objects FOR DELETE
+    TO authenticated
+    USING (
+        bucket_id = 'payment-receipts'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+        AND NOT EXISTS (
+            SELECT 1
+            FROM public.payment_requests pr
+            WHERE pr.receipt_storage_path = name
+        )
+    );
+
+-- سياسات Storage لـ listing-images (عام للقراءة، مقيد بمجلد المستخدم للرفع والتحديث والحذف)
 DROP POLICY IF EXISTS "listing_images_select_public" ON storage.objects;
 CREATE POLICY "listing_images_select_public"
     ON storage.objects FOR SELECT
@@ -217,6 +232,28 @@ CREATE POLICY "listing_images_insert_own_folder"
     ON storage.objects FOR INSERT
     TO authenticated
     WITH CHECK (
+        bucket_id = 'listing-images'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    );
+
+DROP POLICY IF EXISTS "listing_images_update_own_folder" ON storage.objects;
+CREATE POLICY "listing_images_update_own_folder"
+    ON storage.objects FOR UPDATE
+    TO authenticated
+    USING (
+        bucket_id = 'listing-images'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    )
+    WITH CHECK (
+        bucket_id = 'listing-images'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+    );
+
+DROP POLICY IF EXISTS "listing_images_delete_own_folder" ON storage.objects;
+CREATE POLICY "listing_images_delete_own_folder"
+    ON storage.objects FOR DELETE
+    TO authenticated
+    USING (
         bucket_id = 'listing-images'
         AND (storage.foldername(name))[1] = auth.uid()::text
     );

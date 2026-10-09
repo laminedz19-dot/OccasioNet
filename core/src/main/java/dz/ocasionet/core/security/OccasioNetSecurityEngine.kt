@@ -3,8 +3,11 @@ package dz.ocasionet.core.security
 import dz.ocasionet.core.data.AlgeriaGeographyCatalog
 import dz.ocasionet.core.model.AppSettingsData
 import dz.ocasionet.core.model.AuditLogItem
+import dz.ocasionet.core.model.FavoriteRecord
 import dz.ocasionet.core.model.ListingItem
+import dz.ocasionet.core.model.NotificationItem
 import dz.ocasionet.core.model.PaymentRequestItem
+import dz.ocasionet.core.model.ReportItem
 import dz.ocasionet.core.model.UserProfile
 import dz.ocasionet.core.model.UserRoleRecord
 import java.util.UUID
@@ -12,10 +15,8 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * محرك التحقق الأمني ومحاكاة عقود RLS والدوال الخادمية (يُستخدم أيضاً للتحقق المسبق
- * ولاختبار الـ 15 سيناريو الأمني الإلزامي بما فيها التزامن ومنع الاستهلاك المزدوج).
- *
- * أسماء الجداول والدوال هنا مطابقة حرفياً لملفات SQL في supabase/migrations/.
+ * محرك التحقق الأمني ومحاكاة عقود RLS والدوال الخادمية وStorage.
+ * أسماء الجداول والدوال والحاويات هنا مطابقة حرفياً لملفات SQL في supabase/migrations/.
  */
 object SupabaseSchemaContract {
     val REQUIRED_TABLES: Set<String> = setOf(
@@ -67,8 +68,7 @@ object SupabaseSchemaContract {
 class SecurityViolationException(val code: String, override val message: String) : Exception("$code: $message")
 
 /**
- * محرك قواعد RLS والعمليات الذرية (In-Memory Reference Engine) مطابق لسلوك PostgreSQL RLS + RPC
- * للتحقق من الصلاحيات واختبار التزامن ومنع التلاعب بالسعر أو الأدوار أو الإيصالات.
+ * محرك قواعد RLS والعمليات الذرية (In-Memory Reference Engine) مطابق لسلوك PostgreSQL RLS + PostgREST + Storage.
  */
 class RlsPolicyVerifier {
     private val lock = ReentrantLock()
@@ -77,28 +77,68 @@ class RlsPolicyVerifier {
     private val roles = mutableMapOf<String, UserRoleRecord>()
     private val listings = mutableMapOf<String, ListingItem>()
     private val paymentRequests = mutableMapOf<String, PaymentRequestItem>()
+    private val favorites = mutableListOf<FavoriteRecord>()
+    private val reports = mutableMapOf<String, ReportItem>()
+    private val notifications = mutableMapOf<String, NotificationItem>()
     private val auditLogs = mutableListOf<AuditLogItem>()
     private val storageObjects = mutableMapOf<String, ByteArray>() // key: "bucket/path"
-    private var appSettings = AppSettingsData(id = 1, listingFeeDzd = 500L)
+    private var appSettings = AppSettingsData(
+        id = 1,
+        listingFeeDzd = 500L,
+        requireEmailConfirmation = true,
+        maxImagesPerListing = 5
+    )
 
-    fun registerUser(userId: String, email: String, fullName: String, isBanned: Boolean = false) {
+    fun registerUser(
+        userId: String,
+        email: String,
+        fullName: String,
+        isBanned: Boolean = false,
+        emailConfirmed: Boolean = true
+    ) {
         lock.withLock {
             profiles[userId] = UserProfile(
                 id = userId,
                 email = email,
                 fullName = fullName,
                 isBanned = isBanned,
-                emailConfirmed = true
+                emailConfirmed = emailConfirmed
             )
+            // يحاكي سلوك handle_new_user trigger: ينشئ دور 'user' مع ON CONFLICT DO NOTHING
             roles.putIfAbsent(userId, UserRoleRecord(userId = userId, role = "user"))
         }
     }
 
+    fun setUserEmailConfirmed(userId: String, confirmed: Boolean) = lock.withLock {
+        val current = profiles[userId] ?: return@withLock
+        profiles[userId] = current.copy(emailConfirmed = confirmed)
+    }
+
+    fun setRequireEmailConfirmation(required: Boolean) = lock.withLock {
+        appSettings = appSettings.copy(requireEmailConfirmation = required)
+    }
+
     /**
-     * منح دور المشرف من بيئة SQL الإدارية الخادمية فقط (وليس من العميل).
+     * يحاكي خطأ استخدام ON CONFLICT DO NOTHING بعد إنشاء المستخدم (لا يرقّي الدور لأن صف 'user' موجود مسبقاً).
+     */
+    fun attemptSqlGrantAdminWithDoNothing(targetUserId: String): String = lock.withLock {
+        roles.putIfAbsent(targetUserId, UserRoleRecord(userId = targetUserId, role = "admin"))
+        roles[targetUserId]?.role ?: "user"
+    }
+
+    /**
+     * منح دور المشرف من بيئة SQL الإدارية الخادمية فقط باستخدام ON CONFLICT (user_id) DO UPDATE.
      */
     fun grantAdminRoleFromSqlEditorOnly(targetUserId: String, sqlOperatorId: String) {
         lock.withLock {
+            val profile = profiles[targetUserId]
+                ?: throw SecurityViolationException("USER_NOT_FOUND", "المستخدم غير موجود.")
+            if (!profile.emailConfirmed) {
+                throw SecurityViolationException("EMAIL_NOT_CONFIRMED", "يجب تأكيد بريد المشرف قبل ترقيته.")
+            }
+            if (profile.isBanned) {
+                throw SecurityViolationException("USER_BANNED", "لا يمكن ترقية حساب محظور إلى مشرف.")
+            }
             roles[targetUserId] = UserRoleRecord(
                 userId = targetUserId,
                 role = "admin",
@@ -114,9 +154,6 @@ class RlsPolicyVerifier {
         !profile.isBanned && role == "admin"
     }
 
-    /**
-     * محاولة المستخدم تغيير دوره من العميل (ممنوعة تماماً بواسطة RLS).
-     */
     fun attemptClientRoleChange(callerUserId: String?, targetUserId: String, newRole: String) {
         throw SecurityViolationException(
             "RLS_ROLE_ESCALATION_DENIED",
@@ -124,9 +161,6 @@ class RlsPolicyVerifier {
         )
     }
 
-    /**
-     * الوصول إلى لوحة الإدارة (يتحقق من الخادم).
-     */
     fun verifyAdminDashboardAccess(callerUserId: String?): Boolean {
         if (!isAdmin(callerUserId)) {
             throw SecurityViolationException(
@@ -137,9 +171,45 @@ class RlsPolicyVerifier {
         return true
     }
 
-    /**
-     * قراءة الإعلانات العامة (متاحة للزوار والمستخدمين للإعلانات المنشورة فقط).
-     */
+    // --- استعلامات PostgREST المحكومة بسياسات RLS (تُرجع قائمة فارغة عندما تحجب السياسة الصفوف) ---
+
+    fun queryProfiles(callerUserId: String?): List<UserProfile> = lock.withLock {
+        if (callerUserId == null) return emptyList()
+        if (isAdmin(callerUserId)) return profiles.values.toList()
+        profiles[callerUserId]?.let { listOf(it) } ?: emptyList()
+    }
+
+    fun updateProfileByClient(
+        callerUserId: String?,
+        targetUserId: String,
+        fullName: String? = null,
+        attemptedIsBannedChange: Boolean? = null
+    ): UserProfile = lock.withLock {
+        if (callerUserId == null || callerUserId != targetUserId) {
+            throw SecurityViolationException(
+                "RLS_PROFILE_UPDATE_OTHER_DENIED",
+                "لا يمكن للمستخدم تعديل ملف شخصي لمستخدم آخر."
+            )
+        }
+        val existing = profiles[callerUserId]
+            ?: throw SecurityViolationException("PROFILE_MISSING", "الملف غير موجود.")
+        if (existing.isBanned || (attemptedIsBannedChange != null && attemptedIsBannedChange != existing.isBanned)) {
+            throw SecurityViolationException(
+                "RLS_PROFILE_BAN_BYPASS_DENIED",
+                "لا يمكن للمستخدم المحظور تعديل ملفه أو تغيير حالة is_banned."
+            )
+        }
+        val updated = existing.copy(fullName = fullName ?: existing.fullName)
+        profiles[callerUserId] = updated
+        updated
+    }
+
+    fun queryUserRoles(callerUserId: String?): List<UserRoleRecord> = lock.withLock {
+        if (callerUserId == null) return emptyList()
+        if (isAdmin(callerUserId)) return roles.values.toList()
+        roles[callerUserId]?.let { listOf(it) } ?: emptyList()
+    }
+
     fun queryVisibleListings(callerUserId: String?): List<ListingItem> = lock.withLock {
         val admin = isAdmin(callerUserId)
         listings.values.filter { item ->
@@ -147,9 +217,94 @@ class RlsPolicyVerifier {
         }
     }
 
-    /**
-     * رفع ملف إلى Supabase Storage مع فحص المسار ونوع MIME والحجم.
-     */
+    fun queryPaymentRequests(callerUserId: String?): List<PaymentRequestItem> = lock.withLock {
+        if (callerUserId == null) return emptyList()
+        if (isAdmin(callerUserId)) return paymentRequests.values.toList()
+        paymentRequests.values.filter { it.userId == callerUserId }
+    }
+
+    fun attemptDirectPaymentUpdateFromClient(callerUserId: String?, paymentId: String, newStatus: String) {
+        throw SecurityViolationException(
+            "RLS_PAYMENT_UPDATE_DENIED",
+            "لا توجد سياسة UPDATE للعميل على جدول payment_requests."
+        )
+    }
+
+    fun addFavorite(callerUserId: String?, targetUserId: String, listingId: String): FavoriteRecord = lock.withLock {
+        if (callerUserId == null || callerUserId != targetUserId) {
+            throw SecurityViolationException("RLS_FAVORITE_DENIED", "لا يمكن إضافة مفضلة باسم مستخدم آخر أو كزائر.")
+        }
+        val rec = FavoriteRecord(userId = callerUserId, listingId = listingId)
+        favorites.removeAll { it.userId == callerUserId && it.listingId == listingId }
+        favorites.add(rec)
+        rec
+    }
+
+    fun removeFavorite(callerUserId: String?, targetUserId: String, listingId: String): Boolean = lock.withLock {
+        if (callerUserId == null || callerUserId != targetUserId) {
+            throw SecurityViolationException(
+                "RLS_FAVORITES_DELETE_OTHER_DENIED",
+                "لا يمكن للمستخدم حذف مفضلة تخص مستخدماً آخر."
+            )
+        }
+        favorites.removeAll { it.userId == targetUserId && it.listingId == listingId }
+    }
+
+    fun queryFavorites(callerUserId: String?, targetOwnerId: String? = callerUserId): List<FavoriteRecord> = lock.withLock {
+        if (callerUserId == null) return emptyList()
+        if (targetOwnerId != null && targetOwnerId != callerUserId) {
+            throw SecurityViolationException(
+                "RLS_FAVORITES_SELECT_OTHER_DENIED",
+                "لا يمكن للمستخدم قراءة مفضلة مستخدم آخر."
+            )
+        }
+        favorites.filter { it.userId == callerUserId }
+    }
+
+    fun submitReport(
+        callerUserId: String?,
+        reporterId: String,
+        listingId: String,
+        reason: String,
+        details: String = ""
+    ): ReportItem = lock.withLock {
+        if (callerUserId == null || callerUserId != reporterId) {
+            throw SecurityViolationException("RLS_REPORT_INSERT_DENIED", "يجب أن يطابق reporter_id معرّف الجلسة الحالي.")
+        }
+        val id = UUID.randomUUID().toString()
+        val item = ReportItem(id = id, listingId = listingId, reporterId = callerUserId, reason = reason, details = details)
+        reports[id] = item
+        item
+    }
+
+    fun queryReports(callerUserId: String?): List<ReportItem> = lock.withLock {
+        if (callerUserId == null || !isAdmin(callerUserId)) {
+            throw SecurityViolationException("RLS_REPORTS_SELECT_DENIED", "قراءة جدول البلاغات الكامل متاحة للمشرفين فقط.")
+        }
+        reports.values.toList()
+    }
+
+    fun queryNotifications(callerUserId: String?, targetUserId: String? = callerUserId): List<NotificationItem> = lock.withLock {
+        if (callerUserId == null) return emptyList()
+        if (targetUserId != null && targetUserId != callerUserId) {
+            throw SecurityViolationException("RLS_NOTIFICATIONS_SELECT_OTHER_DENIED", "لا يمكن قراءة إشعارات مستخدم آخر.")
+        }
+        notifications.values.filter { it.userId == callerUserId }
+    }
+
+    fun markNotificationRead(callerUserId: String?, notificationId: String): NotificationItem = lock.withLock {
+        val notif = notifications[notificationId]
+            ?: throw SecurityViolationException("NOT_FOUND", "الإشعار غير موجود.")
+        if (callerUserId == null || notif.userId != callerUserId) {
+            throw SecurityViolationException("RLS_NOTIFICATIONS_UPDATE_OTHER_DENIED", "لا يمكن تحديث إشعارات مستخدم آخر.")
+        }
+        val updated = notif.copy(isRead = true)
+        notifications[notificationId] = updated
+        updated
+    }
+
+    // --- Supabase Storage (payment-receipts & listing-images) ---
+
     fun uploadStorageFile(
         callerUserId: String?,
         bucket: String,
@@ -193,9 +348,11 @@ class RlsPolicyVerifier {
         objectPath
     }
 
-    /**
-     * قراءة إيصال دفع من Storage الخاص (مسموح لمالك الإيصال أو المشرف فقط).
-     */
+    fun readListingImagePublic(objectPath: String): ByteArray = lock.withLock {
+        storageObjects["listing-images/$objectPath"]
+            ?: throw SecurityViolationException("NOT_FOUND", "صورة الإعلان غير موجودة.")
+    }
+
     fun readReceiptFromPrivateStorage(callerUserId: String?, objectPath: String): ByteArray = lock.withLock {
         if (callerUserId == null) {
             throw SecurityViolationException("UNAUTHORIZED_RECEIPT_READ", "الزوار لا يمكنهم قراءة إيصالات الدفع.")
@@ -212,8 +369,73 @@ class RlsPolicyVerifier {
     }
 
     /**
-     * إرسال طلب دفع (تفرض الدالة الخادمية السعر الرسمي من app_settings وتتجاهل أي سعر مرسل من العميل).
+     * حذف ملف من Storage وفق سياسات الحذف المحدودة:
+     * - في `listing-images`: يقتصر على مجلد المالك `{callerUserId}/...`
+     * - في `payment-receipts`: يقتصر على مجلد المالك بشرط عدم ارتباط الإيصال بأي طلب دفع قائم (تنظيف الإيصالات اليتيمة فقط).
      */
+    fun deleteStorageFile(callerUserId: String?, bucket: String, objectPath: String): Boolean = lock.withLock {
+        if (callerUserId == null) {
+            throw SecurityViolationException("UNAUTHORIZED_STORAGE", "يجب تسجيل الدخول لحذف الملفات.")
+        }
+        val folderOwner = objectPath.substringBefore("/", missingDelimiterValue = "")
+        if (folderOwner != callerUserId) {
+            throw SecurityViolationException(
+                "STORAGE_DELETE_FORBIDDEN",
+                "لا يمكن للمستخدم حذف ملفات خارج مجلده الشخصي."
+            )
+        }
+        if (bucket == "payment-receipts") {
+            val isLinked = paymentRequests.values.any { it.receiptStoragePath == objectPath }
+            if (isLinked) {
+                throw SecurityViolationException(
+                    "RECEIPT_LINKED_CANNOT_DELETE",
+                    "يُمنع حذف إيصال دفع مرتبط بطلب دفع مسجل في قاعدة البيانات."
+                )
+            }
+        }
+        storageObjects.remove("$bucket/$objectPath") != null
+    }
+
+    fun hasStorageFile(bucket: String, objectPath: String): Boolean = lock.withLock {
+        storageObjects.containsKey("$bucket/$objectPath")
+    }
+
+    /**
+     * تدفق رفع إيصال الدفع مع الحذف التعويضي التلقائي في حال فشل RPC بعد نجاح رفع الملف إلى Storage.
+     */
+    fun uploadAndSubmitPaymentWithCompensation(
+        callerUserId: String?,
+        objectPath: String,
+        mimeType: String,
+        sizeBytes: Long,
+        paymentMethod: String,
+        simulateRpcFailureAfterUpload: Boolean = false
+    ): PaymentRequestItem = lock.withLock {
+        val uploadedPath = uploadStorageFile(
+            callerUserId = callerUserId,
+            bucket = "payment-receipts",
+            objectPath = objectPath,
+            mimeType = mimeType,
+            sizeBytes = sizeBytes
+        )
+        try {
+            if (simulateRpcFailureAfterUpload) {
+                throw SecurityViolationException("RPC_TRANSIENT_FAILURE", "فشل استدعاء دالة تسجيل طلب الدفع الخادمية.")
+            }
+            submitPaymentRequestRpc(
+                callerUserId = callerUserId,
+                paymentMethod = paymentMethod,
+                receiptStoragePath = uploadedPath,
+                receiptMimeType = mimeType,
+                receiptSizeBytes = sizeBytes
+            )
+        } catch (e: Exception) {
+            // حذف تعويضي للملف اليتيم الذي رُفع للتو ولم يرتبط بأي صف في payment_requests
+            runCatching { deleteStorageFile(callerUserId, "payment-receipts", uploadedPath) }
+            throw e
+        }
+    }
+
     fun submitPaymentRequestRpc(
         callerUserId: String?,
         paymentMethod: String,
@@ -240,7 +462,6 @@ class RlsPolicyVerifier {
             throw SecurityViolationException("INVALID_SIZE", "حجم ملف الإيصال غير مسموح.")
         }
 
-        // تجاهل clientAttemptedAmountDzd تماماً واعتماد السعر الخادمي الرسمي من app_settings
         val enforcedServerAmount = appSettings.listingFeeDzd
         val id = UUID.randomUUID().toString()
         val req = PaymentRequestItem(
@@ -257,9 +478,6 @@ class RlsPolicyVerifier {
         req
     }
 
-    /**
-     * مراجعة طلب الدفع (للمشرف فقط، ويُمنع المشرف أو المستخدم من الموافقة على دفعة تخصه).
-     */
     fun reviewPaymentRequestRpc(
         callerUserId: String?,
         requestId: String,
@@ -291,6 +509,19 @@ class RlsPolicyVerifier {
             reviewedAt = "2026-10-09T10:00:00Z"
         )
         paymentRequests[requestId] = updated
+        val notifId = UUID.randomUUID().toString()
+        notifications[notifId] = NotificationItem(
+            id = notifId,
+            userId = existing.userId,
+            titleAr = if (decision == "approved") "تمت الموافقة على طلب الدفع" else "تم رفض طلب الدفع",
+            bodyAr = if (decision == "approved") {
+                "تمت مراجعة إثبات الدفع والموافقة عليه. يمكنك الآن استخدامه لنشر إعلانك."
+            } else {
+                "تم رفض طلب الدفع: ${rejectionReason?.trim()}"
+            },
+            type = if (decision == "approved") "payment_approved" else "payment_rejected",
+            relatedEntityId = requestId
+        )
         auditLogs.add(
             AuditLogItem(
                 id = UUID.randomUUID().toString(),
@@ -303,9 +534,6 @@ class RlsPolicyVerifier {
         updated
     }
 
-    /**
-     * الدالة الذرية لنشر الإعلان مقابل استهلاك دفعة معتمدة واحدة فقط (مع قفل تزامن صارم).
-     */
     fun createListingWithPaidReceiptRpc(
         callerUserId: String?,
         paymentRequestId: String,
@@ -316,7 +544,8 @@ class RlsPolicyVerifier {
         description: String,
         priceDzd: Long,
         condition: String,
-        contactPhone: String
+        contactPhone: String,
+        imageUrls: List<String> = emptyList()
     ): ListingItem = lock.withLock {
         if (callerUserId == null) {
             throw SecurityViolationException("UNAUTHORIZED", "لا يمكن للزائر نشر إعلان دون تسجيل الدخول.")
@@ -325,6 +554,23 @@ class RlsPolicyVerifier {
             ?: throw SecurityViolationException("PROFILE_MISSING", "الحساب غير موجود.")
         if (profile.isBanned) {
             throw SecurityViolationException("ACCOUNT_BANNED", "الحساب محظور.")
+        }
+        if (appSettings.requireEmailConfirmation && !profile.emailConfirmed) {
+            throw SecurityViolationException("EMAIL_NOT_CONFIRMED", "يجب تأكيد البريد الإلكتروني أولاً قبل نشر إعلان.")
+        }
+        if (imageUrls.size > appSettings.maxImagesPerListing) {
+            throw SecurityViolationException("TOO_MANY_IMAGES", "عدد صور الإعلان يتجاوز الحد الأقصى المسموح به.")
+        }
+        val hasForeignImage = imageUrls.any { img ->
+            !img.startsWith("$callerUserId/") &&
+                !img.contains("/storage/v1/object/public/listing-images/$callerUserId/") &&
+                !img.startsWith("storage/v1/object/public/listing-images/$callerUserId/")
+        }
+        if (hasForeignImage) {
+            throw SecurityViolationException(
+                "FORBIDDEN_IMAGE_PATH",
+                "جميع صور الإعلان يجب أن تقع داخل مجلد المستخدم المالك في listing-images."
+            )
         }
         if (!AlgeriaGeographyCatalog.isCommuneInWilaya(communeId, wilayaCode)) {
             throw SecurityViolationException("INVALID_LOCATION", "البلدية لا تتبع الولاية المختارة.")
@@ -354,7 +600,8 @@ class RlsPolicyVerifier {
             priceDzd = priceDzd,
             condition = condition,
             status = "published",
-            contactPhone = contactPhone.trim()
+            contactPhone = contactPhone.trim(),
+            imageUrls = imageUrls
         )
         listings[listingId] = listing
         paymentRequests[paymentRequestId] = payment.copy(
@@ -374,9 +621,94 @@ class RlsPolicyVerifier {
         listing
     }
 
+    fun adminSetUserBanStatusRpc(
+        callerUserId: String?,
+        targetUserId: String,
+        isBanned: Boolean,
+        banReason: String? = null
+    ): Boolean = lock.withLock {
+        if (!isAdmin(callerUserId)) {
+            throw SecurityViolationException("FORBIDDEN_ADMIN_ONLY", "صلاحيات المشرف مطلوبة.")
+        }
+        if (callerUserId == targetUserId) {
+            throw SecurityViolationException("CANNOT_BAN_SELF", "لا يمكن للمشرف حظر حسابه الشخصي.")
+        }
+        val target = profiles[targetUserId]
+            ?: throw SecurityViolationException("NOT_FOUND", "المستخدم المستهدف غير موجود.")
+        profiles[targetUserId] = target.copy(isBanned = isBanned, banReason = if (isBanned) banReason else null)
+        auditLogs.add(
+            AuditLogItem(
+                id = UUID.randomUUID().toString(),
+                actorId = callerUserId!!,
+                actionType = if (isBanned) "BAN_USER" else "UNBAN_USER",
+                targetTable = "profiles",
+                targetId = targetUserId
+            )
+        )
+        true
+    }
+
+    fun adminUpdateAppSettingsRpc(
+        callerUserId: String?,
+        listingFeeDzd: Long,
+        ccpInstructionsAr: String,
+        baridimobInstructionsAr: String,
+        paymentNoticeAr: String,
+        requireEmailConfirmation: Boolean = appSettings.requireEmailConfirmation
+    ): AppSettingsData = lock.withLock {
+        if (!isAdmin(callerUserId)) {
+            throw SecurityViolationException("FORBIDDEN_ADMIN_ONLY", "صلاحيات المشرف مطلوبة.")
+        }
+        if (listingFeeDzd <= 0) {
+            throw SecurityViolationException("INVALID_FEE", "سعر النشر يجب أن يكون أكبر من صفر.")
+        }
+        appSettings = appSettings.copy(
+            listingFeeDzd = listingFeeDzd,
+            ccpInstructionsAr = ccpInstructionsAr,
+            baridimobInstructionsAr = baridimobInstructionsAr,
+            paymentNoticeAr = paymentNoticeAr,
+            requireEmailConfirmation = requireEmailConfirmation
+        )
+        auditLogs.add(
+            AuditLogItem(
+                id = UUID.randomUUID().toString(),
+                actorId = callerUserId!!,
+                actionType = "UPDATE_APP_SETTINGS",
+                targetTable = "app_settings",
+                targetId = "1"
+            )
+        )
+        appSettings
+    }
+
+    fun adminModerateListingRpc(
+        callerUserId: String?,
+        listingId: String,
+        newStatus: String,
+        reason: String
+    ): ListingItem = lock.withLock {
+        if (!isAdmin(callerUserId)) {
+            throw SecurityViolationException("FORBIDDEN_ADMIN_ONLY", "صلاحيات المشرف مطلوبة.")
+        }
+        val existing = listings[listingId]
+            ?: throw SecurityViolationException("NOT_FOUND", "الإعلان غير موجود.")
+        val updated = existing.copy(status = newStatus)
+        listings[listingId] = updated
+        auditLogs.add(
+            AuditLogItem(
+                id = UUID.randomUUID().toString(),
+                actorId = callerUserId!!,
+                actionType = "MODERATE_LISTING_${newStatus.uppercase()}",
+                targetTable = "listings",
+                targetId = listingId
+            )
+        )
+        updated
+    }
+
     fun getAuditLogsForAdmin(callerUserId: String?): List<AuditLogItem> = lock.withLock {
         if (!isAdmin(callerUserId)) {
-            throw SecurityViolationException("FORBIDDEN_ADMIN_ONLY", "سجل التدقيق متاح للمشرفين فقط.")
+            throw SecurityViolationException("RLS_AUDIT_LOGS_DENIED", "سجل التدقيق متاح للمشرفين فقط.")
         }
         auditLogs.toList()
     }

@@ -89,6 +89,32 @@ fun UserCreateListingScreen(viewModel: UserViewModel) {
     var contactPhone by remember(pendingDraft, currentUser) {
         mutableStateOf(pendingDraft?.contactPhone ?: currentUser?.phone ?: "")
     }
+    var imageUrls by remember(pendingDraft) {
+        mutableStateOf(pendingDraft?.imageUrls ?: emptyList())
+    }
+    val context = LocalContext.current
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val cr = context.contentResolver
+            val mime = cr.getType(uri) ?: "image/jpeg"
+            val bytes = cr.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes != null) {
+                val fileName = uri.lastPathSegment ?: "listing_img.${mime.substringAfterLast('/')}"
+                viewModel.uploadDraftListingImage(
+                    fileName = fileName,
+                    mimeType = mime,
+                    fileBytes = bytes
+                ) { uploadedUrl ->
+                    if (imageUrls.size < settings.maxImagesPerListing) {
+                        imageUrls = imageUrls + uploadedUrl
+                    }
+                }
+            }
+        }
+    }
 
     val isFormValid = title.trim().length >= 5 &&
         description.trim().length >= 10 &&
@@ -235,6 +261,57 @@ fun UserCreateListingScreen(viewModel: UserViewModel) {
         }
 
         item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "صور الإعلان (${imageUrls.size}/${settings.maxImagesPerListing}) — حاوية listing-images",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "الصيغ المسموحة: JPG, PNG, WEBP (بحد أقصى 5MB للصورة داخل مجلدك الشخصي).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (imageUrls.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            imageUrls.forEachIndexed { idx, imgUrl ->
+                                FilterChip(
+                                    selected = true,
+                                    onClick = {
+                                        viewModel.deleteDraftListingImage(imgUrl) {
+                                            imageUrls = imageUrls.filterNot { it == imgUrl }
+                                        }
+                                    },
+                                    label = { Text("حذف صورة #${idx + 1}") }
+                                )
+                            }
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            imagePickerLauncher.launch(arrayOf("image/jpeg", "image/png", "image/webp"))
+                        },
+                        enabled = imageUrls.size < settings.maxImagesPerListing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("pick_listing_image_button")
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("إرفاق صورة للإعلان (JPG / PNG / WEBP)")
+                    }
+                }
+            }
+        }
+
+        item {
             Button(
                 onClick = {
                     val price = priceText.toLongOrNull() ?: 0L
@@ -246,7 +323,8 @@ fun UserCreateListingScreen(viewModel: UserViewModel) {
                         wilayaCode = selectedWilayaCode,
                         communeId = selectedCommuneId,
                         condition = selectedCondition,
-                        contactPhone = contactPhone.trim()
+                        contactPhone = contactPhone.trim(),
+                        imageUrls = imageUrls
                     )
                     viewModel.requestPublishListing(
                         draft = draft,
@@ -845,6 +923,12 @@ fun UserNotificationsScreen(viewModel: UserViewModel) {
 @Composable
 fun UserSettingsScreen(viewModel: UserViewModel) {
     val activePalette by dz.ocasionet.core.ui.theme.OccasioNetPaletteStore.selectedPalette.collectAsState()
+    val localPrefs by viewModel.repository.localUserPreferences.collectAsState()
+    val categories by viewModel.repository.categories.collectAsState()
+    val savedCategoryName = remember(localPrefs.preferredCategoryId, categories) {
+        categories.firstOrNull { it.id == localPrefs.preferredCategoryId }?.nameAr ?: "جميع الفئات"
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -856,6 +940,101 @@ fun UserSettingsScreen(viewModel: UserViewModel) {
             Text("اللغة الافتراضية: العربية (دعم كامل لـ RTL)")
             Text("العملة المعتمدة: الدينار الجزائري (دج)")
         }
+
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "التفضيلات المحلية المحفوظة (Jetpack DataStore)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("الوضع الليلي الملكي (Dark Mode)", fontWeight = FontWeight.Bold)
+                            Text(
+                                "التبديل الفوري وحفظ المظهر في DataStore",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = localPrefs.darkModeEnabled ||
+                                activePalette == dz.ocasionet.core.ui.theme.AppColorPalette.OCCASIONET_LOGO_DARK,
+                            onCheckedChange = { viewModel.toggleDarkMode(it) },
+                            modifier = Modifier.testTag("dark_mode_switch")
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("تنبيهات الإشعارات المحلية", fontWeight = FontWeight.Bold)
+                            Text(
+                                "تلقي إشعارات حالة الدفع ومراجعة الإعلانات",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = localPrefs.notificationsEnabled,
+                            onCheckedChange = { viewModel.toggleNotificationsEnabled(it) },
+                            modifier = Modifier.testTag("notifications_switch")
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "تفضيلات البحث والتصفية المحفوظة تلقائياً",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "• الولاية المفضلة: ${
+                            localPrefs.preferredWilayaCode?.let { AlgeriaGeographyCatalog.getWilayaNameAr(it) } ?: "كل الولايات"
+                        }"
+                    )
+                    Text(
+                        "• البلدية المفضلة: ${
+                            localPrefs.preferredCommuneId?.let { AlgeriaGeographyCatalog.getCommuneNameAr(it) } ?: "كل البلديات"
+                        }"
+                    )
+                    Text("• آخر تصنيف للبحث: $savedCategoryName")
+                    Text(
+                        "• نطاق السعر المحفوظ: ${localPrefs.preferredMinPriceDzd ?: 0L} دج - ${
+                            localPrefs.preferredMaxPriceDzd?.let { "$it دج" } ?: "مفتوح"
+                        }"
+                    )
+                    Text(
+                        "• حالة الموافقة على الشروط والخصوصية: ${
+                            if (localPrefs.acceptedTermsAndPrivacy) "تمت الموافقة وموثقة في DataStore" else "بانتظار التأكيد"
+                        }"
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.clearAllLocalPreferences() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("clear_saved_prefs_button")
+                    ) {
+                        Text("إعادة ضبط جميع التفضيلات والفلاتر المحفوظة")
+                    }
+                }
+            }
+        }
+
         item {
             Text("اختر لوحة الألوان المفضلة للتطبيق:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             FlowRow(
@@ -865,7 +1044,12 @@ fun UserSettingsScreen(viewModel: UserViewModel) {
                 dz.ocasionet.core.ui.theme.AppColorPalette.entries.forEach { palette ->
                     FilterChip(
                         selected = activePalette == palette,
-                        onClick = { dz.ocasionet.core.ui.theme.OccasioNetPaletteStore.selectPalette(palette) },
+                        onClick = {
+                            dz.ocasionet.core.ui.theme.OccasioNetPaletteStore.selectPalette(palette)
+                            viewModel.toggleDarkMode(
+                                palette == dz.ocasionet.core.ui.theme.AppColorPalette.OCCASIONET_LOGO_DARK
+                            )
+                        },
                         label = { Text(palette.titleAr) },
                         modifier = Modifier.testTag("palette_option_${palette.name}")
                     )
@@ -893,6 +1077,8 @@ fun UserSettingsScreen(viewModel: UserViewModel) {
 
 @Composable
 fun UserTermsAndPrivacyScreen(viewModel: UserViewModel) {
+    val settings by viewModel.repository.appSettings.collectAsState()
+    val localPrefs by viewModel.repository.localUserPreferences.collectAsState()
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -900,10 +1086,76 @@ fun UserTermsAndPrivacyScreen(viewModel: UserViewModel) {
     ) {
         item {
             Text("شروط الاستخدام وسياسة الخصوصية - OccasioNet", style = MaterialTheme.typography.headlineMedium)
-            Text("1. تلتزم منصة OccasioNet بحماية بيانات المستخدمين في الجزائر عبر سياسات Row Level Security (RLS) في Supabase.")
-            Text("2. إيصالات الدفع المرفوعة عبر CCP أو BaridiMob تُحفظ في حاوية خاصة (Private Bucket) ولا يمكن لأي مستخدم آخر الاطلاع عليها.")
-            Text("3. رسوم نشر الإعلان (500 دج مبدئياً) تُراجع يدوياً من الإدارة، وتُستهلك كل دفعة معتمدة لنشر إعلان واحد فقط داخل معاملة ذرية.")
-            Text("4. يمنع نشر أي سلع محظورة قانوناً في الجمهورية الجزائرية الديمقراطية الشعبية.")
+            Text(
+                "مسودة تقنية وتشغيلية مستندة إلى سلوك التطبيق الفعلي (تخضع للمراجعة والاعتماد النهائي من مالك المشروع أو مستشار قانوني قبل النشر التجاري).",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("1. البيانات التي يجمعها التطبيق", fontWeight = FontWeight.Bold)
+                    Text("• بيانات الحساب: الاسم الكامل، البريد الإلكتروني، رقم الهاتف الجزائري، والولاية/البلدية.")
+                    Text("• بيانات الإعلانات: العنوان، الوصف، السعر بالدينار الجزائري، والصور المرفوعة في حاوية listing-images العامة.")
+                    Text("• رموز الجلسة: تُخزّن مشفرة محلياً بواسطة Android Keystore (AES/GCM) داخل DataStore ولا تُكتب في سجلات النظام.")
+                }
+            }
+        }
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("2. رسوم النشر وإيصالات الدفع والاحتفاظ بها", fontWeight = FontWeight.Bold)
+                    Text("• رسوم نشر الإعلان الواحد هي ${settings.listingFeeDzd} دج وتُدفع عبر التحويل البريدي (CCP) أو تطبيق بريدي موب (BaridiMob).")
+                    Text("• تُحفظ إيصالات الدفع في حاوية خاصة (payment-receipts) محمية بسياسات RLS، ولا يطلع عليها سوى صاحب الطلب والمشرف المختص عبر رابط مؤقت قصير الصلاحية (120 ثانية).")
+                    Text("• كل إيصال معتمد يُستهلك ذرياً لنشر إعلان واحد فقط، ويُحظر تعديل الإيصال أو إعادة استخدامه.")
+                    Text("• سياسة الاحتفاظ المقترحة (تُعتمد من المالك): يُحتفظ بسجل المراجعة لأغراض التدقيق المالي ومنع التكرار، بينما تُحذف الإيصالات اليتيمة غير المرتبطة بطلب دفع تلقائياً.")
+                }
+            }
+        }
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("3. شروط المحتوى والمسؤولية", fontWeight = FontWeight.Bold)
+                    Text("• يمنع نشر أي سلع محظورة أو مخالفة للقوانين السارية في الجمهورية الجزائرية الديمقراطية الشعبية.")
+                    Text("• تحتفظ إدارة OccasioNet بحق إخفاء أو رفض أي إعلان مخالف أو حظر الحسابات المسيئة مع توثيق السبب في سجل التدقيق.")
+                }
+            }
+        }
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Verified, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (localPrefs.acceptedTermsAndPrivacy) {
+                                "تم تأكيد موافقتك على الشروط وسياسة الخصوصية (محفوظ في DataStore)"
+                            } else {
+                                "تأكيد الموافقة على شروط الاستخدام وسياسة الخصوصية"
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Button(
+                        onClick = { viewModel.setTermsAndPrivacyAccepted(!localPrefs.acceptedTermsAndPrivacy) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("accept_terms_privacy_button")
+                    ) {
+                        Text(
+                            if (localPrefs.acceptedTermsAndPrivacy) {
+                                "إلغاء حالة الموافقة المحفوظة"
+                            } else {
+                                "أوافق على الشروط وسياسة الخصوصية"
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -912,18 +1164,48 @@ fun UserTermsAndPrivacyScreen(viewModel: UserViewModel) {
 fun UserSystemStatesScreen(viewModel: UserViewModel) {
     val configStatus by viewModel.repository.configStatus.collectAsState()
     val listingsState by viewModel.repository.publicListingsState.collectAsState()
+    val localPrefs by viewModel.repository.localUserPreferences.collectAsState()
+    val hasActiveToken = !dz.ocasionet.core.network.SupabaseClient.currentAccessToken.isNullOrBlank()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("حالات الاتصال والبيانات", style = MaterialTheme.typography.headlineMedium)
-        SupabaseConnectionStatusCard(configStatus = configStatus, onRetry = { viewModel.refreshPublicData() })
-        Text("حالة جلب البيانات الحالية: ${listingsState::class.simpleName}")
-        Button(onClick = { viewModel.refreshPublicData() }, modifier = Modifier.fillMaxWidth()) {
-            Text("إعادة فحص الاتصال بـ Supabase")
+        item {
+            Text("حالات الاتصال والتحقق النهائي (Supabase & DataStore)", style = MaterialTheme.typography.headlineMedium)
+            SupabaseConnectionStatusCard(configStatus = configStatus, onRetry = { viewModel.refreshPublicData() })
+            Text("حالة جلب البيانات الحالية: ${listingsState::class.simpleName}")
+        }
+
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("قائمة التحقق التشغيلي والأمني النهائي", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                    Text(
+                        "1. متغيرات اتصال Supabase: ${
+                            when (val st = configStatus) {
+                                is dz.ocasionet.core.model.SupabaseConfigStatus.Configured -> "مهيأة (${st.url}) بمفتاح عام آمن (${st.anonKeyMasked})"
+                                is dz.ocasionet.core.model.SupabaseConfigStatus.NotConfigured -> "بانتظار إدخال SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets"
+                                is dz.ocasionet.core.model.SupabaseConfigStatus.ForbiddenServiceRoleKey -> "مرفوض أمنياً: ${st.reasonAr}"
+                            }
+                        }"
+                    )
+                    Text("2. تخزين الجلسات المشفر (DataStore + AES/GCM): مفعّل (${if (hasActiveToken) "جلسة نشطة ومشفرة" else "لا توجد جلسة نشطة حالياً"})")
+                    Text("3. تفضيلات المستخدم المحلية: الوضع الليلي=${localPrefs.darkModeEnabled} • الولاية=${localPrefs.preferredWilayaCode ?: "الكل"}")
+                    Text("4. التحقق من قاعدة البيانات: سكربت supabase/tests/01_verify_migrations_and_rls.sql جاهز لفحص 12 جدولاً و 7 دوال SECURITY DEFINER")
+                }
+            }
+        }
+
+        item {
+            Button(onClick = { viewModel.refreshPublicData() }, modifier = Modifier.fillMaxWidth()) {
+                Text("إعادة فحص الاتصال بـ Supabase")
+            }
         }
     }
 }

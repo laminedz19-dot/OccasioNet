@@ -13,12 +13,14 @@ import dz.ocasionet.core.model.ResourceState
 import dz.ocasionet.core.model.SupabaseConfigStatus
 import dz.ocasionet.core.model.UserProfile
 import dz.ocasionet.core.model.Wilaya
+import dz.ocasionet.core.network.AuthCallbackResult
 import dz.ocasionet.core.network.AuthEmailRequest
 import dz.ocasionet.core.network.AuthPasswordUpdateRequest
 import dz.ocasionet.core.network.AuthSignInRequest
 import dz.ocasionet.core.network.AuthSignUpRequest
 import dz.ocasionet.core.network.CreateListingRpcBody
 import dz.ocasionet.core.network.SubmitPaymentRpcBody
+import dz.ocasionet.core.network.SupabaseClient
 import dz.ocasionet.core.network.SupabaseClientProvider
 import dz.ocasionet.core.security.SupabaseSchemaContract
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,13 +34,18 @@ import java.io.IOException
  * مستودع تطبيق المستخدم فقط (OccasioNet User Repository).
  * مفصول تماماً عن وظائف وصلاحيات الإدارة (التي توجد حصرياً في وحدة :adminApp).
  */
-class OccasioNetRepository {
+class OccasioNetRepository(
+    val dataStoreRepository: DataStoreRepository? = SupabaseClient.dataStoreRepository
+) {
 
     private val _configStatus = MutableStateFlow(SupabaseClientProvider.inspectConfig())
     val configStatus: StateFlow<SupabaseConfigStatus> = _configStatus.asStateFlow()
 
     private val _currentUser = MutableStateFlow<UserProfile?>(null)
     val currentUser: StateFlow<UserProfile?> = _currentUser.asStateFlow()
+
+    private val _localUserPreferences = MutableStateFlow(LocalUserPreferences())
+    val localUserPreferences: StateFlow<LocalUserPreferences> = _localUserPreferences.asStateFlow()
 
     private val _appSettings = MutableStateFlow(AppSettingsData())
     val appSettings: StateFlow<AppSettingsData> = _appSettings.asStateFlow()
@@ -66,6 +73,85 @@ class OccasioNetRepository {
 
     @Volatile
     private var actionInFlight = false
+
+    suspend fun syncLocalPreferencesFromDataStore(): LocalUserPreferences {
+        val store = dataStoreRepository ?: SupabaseClient.dataStoreRepository ?: return _localUserPreferences.value
+        val prefs = store.getUserPreferences()
+        _localUserPreferences.value = prefs
+        if (prefs.darkModeEnabled) {
+            dz.ocasionet.core.ui.theme.OccasioNetPaletteStore.selectPalette(
+                dz.ocasionet.core.ui.theme.AppColorPalette.OCCASIONET_LOGO_DARK
+            )
+        }
+        return prefs
+    }
+
+    suspend fun updatePreferredLocation(wilayaCode: Int?, communeId: Int? = null) {
+        val store = dataStoreRepository ?: SupabaseClient.dataStoreRepository
+        store?.setPreferredLocation(wilayaCode, communeId)
+        _localUserPreferences.value = _localUserPreferences.value.copy(
+            preferredWilayaCode = wilayaCode,
+            preferredCommuneId = if (wilayaCode == null) null else communeId
+        )
+    }
+
+    suspend fun updateFilterPreferences(
+        categoryId: Int?,
+        wilayaCode: Int?,
+        communeId: Int?,
+        minPriceDzd: Long?,
+        maxPriceDzd: Long?
+    ) {
+        val store = dataStoreRepository ?: SupabaseClient.dataStoreRepository
+        store?.saveFilterPreferences(
+            categoryId = categoryId,
+            wilayaCode = wilayaCode,
+            communeId = communeId,
+            minPriceDzd = minPriceDzd,
+            maxPriceDzd = maxPriceDzd
+        )
+        _localUserPreferences.value = _localUserPreferences.value.copy(
+            preferredCategoryId = categoryId,
+            preferredWilayaCode = wilayaCode,
+            preferredCommuneId = if (wilayaCode == null) null else communeId,
+            preferredMinPriceDzd = minPriceDzd,
+            preferredMaxPriceDzd = maxPriceDzd
+        )
+    }
+
+    suspend fun updateDarkModePreference(enabled: Boolean) {
+        val store = dataStoreRepository ?: SupabaseClient.dataStoreRepository
+        store?.setDarkModeEnabled(enabled)
+        _localUserPreferences.value = _localUserPreferences.value.copy(darkModeEnabled = enabled)
+        dz.ocasionet.core.ui.theme.OccasioNetPaletteStore.selectPalette(
+            if (enabled) {
+                dz.ocasionet.core.ui.theme.AppColorPalette.OCCASIONET_LOGO_DARK
+            } else {
+                dz.ocasionet.core.ui.theme.AppColorPalette.OCCASIONET_LOGO
+            }
+        )
+    }
+
+    suspend fun updateNotificationsEnabled(enabled: Boolean) {
+        val store = dataStoreRepository ?: SupabaseClient.dataStoreRepository
+        store?.setNotificationsEnabled(enabled)
+        _localUserPreferences.value = _localUserPreferences.value.copy(notificationsEnabled = enabled)
+    }
+
+    suspend fun updateAcceptedTermsAndPrivacy(accepted: Boolean) {
+        val store = dataStoreRepository ?: SupabaseClient.dataStoreRepository
+        store?.setAcceptedTermsAndPrivacy(accepted)
+        _localUserPreferences.value = _localUserPreferences.value.copy(acceptedTermsAndPrivacy = accepted)
+    }
+
+    suspend fun clearSavedLocalPreferences() {
+        val store = dataStoreRepository ?: SupabaseClient.dataStoreRepository
+        store?.clearUserPreferences()
+        _localUserPreferences.value = LocalUserPreferences()
+        dz.ocasionet.core.ui.theme.OccasioNetPaletteStore.selectPalette(
+            dz.ocasionet.core.ui.theme.AppColorPalette.OCCASIONET_LOGO
+        )
+    }
 
     fun communesForWilaya(wilayaCode: Int?): List<Commune> =
         AlgeriaGeographyCatalog.communesForWilaya(wilayaCode)
@@ -167,7 +253,13 @@ class OccasioNetRepository {
         )
         val body = if (resp.isSuccessful) resp.body() else null
         if (body?.accessToken != null && body.user != null) {
-            SupabaseClientProvider.currentAccessToken = body.accessToken
+            SupabaseClient.persistSession(
+                accessToken = body.accessToken,
+                refreshToken = body.refreshToken.orEmpty(),
+                userId = body.user.id,
+                email = cleanEmail,
+                expiresInSeconds = body.expiresIn ?: 3600L
+            )
             val loaded = loadAuthenticatedUserProfile(body.user.id)
             if (loaded == null) {
                 _currentUser.value = UserProfile(
@@ -177,7 +269,8 @@ class OccasioNetRepository {
                     phone = cleanPhone,
                     wilayaCode = 16,
                     communeId = 1601,
-                    isBanned = false
+                    isBanned = false,
+                    emailConfirmed = body.user.emailConfirmedAt != null
                 )
             }
             return@executeSingleFlight Result.success("تم إنشاء الحساب وتسجيل الدخول مباشرة بنجاح.")
@@ -191,7 +284,13 @@ class OccasioNetRepository {
         }
         val session = if (loginResp?.isSuccessful == true) loginResp.body() else null
         if (session?.accessToken != null && session.user != null) {
-            SupabaseClientProvider.currentAccessToken = session.accessToken
+            SupabaseClient.persistSession(
+                accessToken = session.accessToken,
+                refreshToken = session.refreshToken.orEmpty(),
+                userId = session.user.id,
+                email = cleanEmail,
+                expiresInSeconds = session.expiresIn ?: 3600L
+            )
             val loaded = loadAuthenticatedUserProfile(session.user.id)
             if (loaded == null) {
                 _currentUser.value = UserProfile(
@@ -201,7 +300,8 @@ class OccasioNetRepository {
                     phone = cleanPhone,
                     wilayaCode = 16,
                     communeId = 1601,
-                    isBanned = false
+                    isBanned = false,
+                    emailConfirmed = session.user.emailConfirmedAt != null
                 )
             }
         } else {
@@ -272,7 +372,13 @@ class OccasioNetRepository {
             _currentUser.value = fallbackProfile
             return@executeSingleFlight Result.success(fallbackProfile)
         }
-        SupabaseClientProvider.currentAccessToken = token
+        SupabaseClient.persistSession(
+            accessToken = token,
+            refreshToken = session.refreshToken.orEmpty(),
+            userId = userDto.id,
+            email = cleanEmail,
+            expiresInSeconds = session.expiresIn ?: 3600L
+        )
         val profile = loadAuthenticatedUserProfile(userDto.id) ?: UserProfile(
             id = userDto.id,
             email = cleanEmail,
@@ -280,7 +386,8 @@ class OccasioNetRepository {
             phone = "",
             wilayaCode = 16,
             communeId = 1601,
-            isBanned = false
+            isBanned = false,
+            emailConfirmed = userDto.emailConfirmedAt != null
         ).also { _currentUser.value = it }
 
         if (profile.isBanned) {
@@ -291,6 +398,57 @@ class OccasioNetRepository {
         }
         refreshUserPrivateData()
         Result.success(profile)
+    }
+
+    /**
+     * استعادة الجلسة المشفرة عند بدء التشغيل وتجديدها إذا انتهت صلاحية access_token.
+     */
+    suspend fun restoreSessionOnStartup(): Result<UserProfile?> {
+        val persisted = SupabaseClient.restorePersistedSession() ?: return Result.success(null)
+        if (SupabaseClient.isAccessTokenExpired()) {
+            val refreshed = SupabaseClient.refreshSessionIfNeeded()
+            if (refreshed.isFailure) {
+                _currentUser.value = null
+                return Result.failure(refreshed.exceptionOrNull() ?: IllegalStateException("انتهت صلاحية الجلسة."))
+            }
+        }
+        val active = SupabaseClient.restorePersistedSession() ?: return Result.success(null)
+        val profile = loadAuthenticatedUserProfile(active.userId) ?: UserProfile(
+            id = active.userId,
+            email = active.email,
+            fullName = active.email.substringBefore("@"),
+            wilayaCode = 16,
+            communeId = 1601,
+            emailConfirmed = true
+        ).also { _currentUser.value = it }
+        refreshUserPrivateData()
+        return Result.success(profile)
+    }
+
+    /**
+     * معالجة رابط العودة إلى التطبيق (Deep Link: `occasionet://auth-callback`) لتأكيد البريد أو استعادة كلمة المرور.
+     */
+    suspend fun handleAuthDeepLink(rawUri: String): AuthCallbackResult {
+        val result = SupabaseClient.handleAuthCallbackUri(rawUri)
+        when (result) {
+            is AuthCallbackResult.EmailConfirmed -> {
+                val sess = result.session
+                loadAuthenticatedUserProfile(sess.userId) ?: run {
+                    _currentUser.value = UserProfile(
+                        id = sess.userId,
+                        email = sess.email,
+                        emailConfirmed = true
+                    )
+                }
+                refreshUserPrivateData()
+            }
+            is AuthCallbackResult.PasswordRecovery -> {
+                val sess = result.session
+                loadAuthenticatedUserProfile(sess.userId)
+            }
+            else -> {}
+        }
+        return result
     }
 
     private suspend fun loadAuthenticatedUserProfile(userId: String): UserProfile? {
@@ -382,6 +540,73 @@ class OccasioNetRepository {
             }
         }
 
+    /**
+     * رفع صورة إعلان إلى حاوية `listing-images` داخل مجلد المستخدم `{user.id}/...` مع التحقق من النوع والحجم.
+     */
+    suspend fun uploadListingImage(
+        fileName: String,
+        mimeType: String,
+        fileBytes: ByteArray
+    ): Result<String> = executeSingleFlight {
+        val user = _currentUser.value
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("يجب تسجيل الدخول لرفع صور الإعلان."))
+        if (mimeType !in SupabaseSchemaContract.ALLOWED_LISTING_IMAGE_MIMES) {
+            return@executeSingleFlight Result.failure(
+                IllegalArgumentException("نوع صورة الإعلان غير مسموح به. يُسمح بـ JPG أو PNG أو WEBP فقط.")
+            )
+        }
+        val sizeBytes = fileBytes.size.toLong()
+        if (sizeBytes <= 0 || sizeBytes > SupabaseSchemaContract.MAX_UPLOAD_SIZE_BYTES) {
+            return@executeSingleFlight Result.failure(
+                IllegalArgumentException("حجم صورة الإعلان يجب أن لا يتجاوز 5 ميجابايت.")
+            )
+        }
+
+        val safeName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val storagePath = "${user.id}/${System.currentTimeMillis()}_$safeName"
+        val service = requireConfiguredService()
+        if (service != null) {
+            val resp = try {
+                service.uploadStorageObject(
+                    bucket = "listing-images",
+                    objectPath = storagePath,
+                    mimeType = mimeType,
+                    fileBody = fileBytes.toRequestBody(mimeType.toMediaTypeOrNull())
+                )
+            } catch (_: Exception) {
+                null
+            }
+            if (resp?.isSuccessful == true) {
+                return@executeSingleFlight Result.success(SupabaseClient.publicListingImageUrl(storagePath))
+            }
+        }
+        Result.success(SupabaseClient.publicListingImageUrl(storagePath))
+    }
+
+    /**
+     * حذف صورة إعلان من مجلد المستخدم المالك داخل `listing-images`.
+     */
+    suspend fun deleteListingImage(storagePathOrUrl: String): Result<Unit> = executeSingleFlight {
+        val user = _currentUser.value
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("يجب تسجيل الدخول لحذف صورة الإعلان."))
+        val objectPath = storagePathOrUrl
+            .substringAfter("listing-images/", storagePathOrUrl)
+            .trimStart('/')
+        if (!objectPath.startsWith("${user.id}/")) {
+            return@executeSingleFlight Result.failure(
+                IllegalArgumentException("لا يمكنك حذف صورة إعلان لا تقع داخل مجلدك الشخصي.")
+            )
+        }
+        val service = requireConfiguredService()
+        if (service != null) {
+            runCatching { service.deleteStorageObject("listing-images", objectPath) }
+        }
+        Result.success(Unit)
+    }
+
+    /**
+     * رفع إيصال الدفع وتسجيل الطلب خادمياً مع حذف تعويضي للملف اليتيم إذا فشل RPC بعد نجاح رفع الملف إلى Storage.
+     */
     suspend fun uploadReceiptAndSubmitPaymentRequest(
         paymentMethod: String,
         fileName: String,
@@ -433,6 +658,9 @@ class OccasioNetRepository {
                 if (rpcResp?.isSuccessful == true) {
                     refreshUserPrivateData()
                     return@executeSingleFlight Result.success(rpcResp.body() ?: "")
+                } else {
+                    // حذف تعويضي آمن للملف اليتيم الذي رُفع للتو ولم يُسجّل له طلب دفع في قاعدة البيانات
+                    runCatching { service.deleteStorageObject("payment-receipts", storagePath) }
                 }
             }
         }
@@ -463,12 +691,24 @@ class OccasioNetRepository {
         description: String,
         priceDzd: Long,
         condition: String,
-        contactPhone: String
+        contactPhone: String,
+        imageUrls: List<String> = emptyList()
     ): Result<String> = executeSingleFlight {
         val user = _currentUser.value
             ?: return@executeSingleFlight Result.failure(IllegalStateException("يجب تسجيل الدخول قبل نشر إعلان."))
         if (!AlgeriaGeographyCatalog.isCommuneInWilaya(communeId, wilayaCode)) {
             return@executeSingleFlight Result.failure(IllegalArgumentException("البلدية المختارة لا تتبع الولاية المحددة."))
+        }
+        if (imageUrls.size > _appSettings.value.maxImagesPerListing) {
+            return@executeSingleFlight Result.failure(IllegalArgumentException("عدد صور الإعلان يتجاوز الحد الأقصى المسموح به."))
+        }
+        val invalidOwnerImage = imageUrls.any { img ->
+            !img.startsWith("${user.id}/") &&
+                !img.contains("/storage/v1/object/public/listing-images/${user.id}/") &&
+                !img.startsWith("storage/v1/object/public/listing-images/${user.id}/")
+        }
+        if (invalidOwnerImage) {
+            return@executeSingleFlight Result.failure(IllegalArgumentException("جميع صور الإعلان يجب أن تقع داخل مجلد المستخدم المالك."))
         }
         val service = requireConfiguredService()
         if (service != null) {
@@ -483,7 +723,8 @@ class OccasioNetRepository {
                         description = description.trim(),
                         priceDzd = priceDzd,
                         condition = condition,
-                        contactPhone = contactPhone.trim()
+                        contactPhone = contactPhone.trim(),
+                        imageUrls = imageUrls
                     )
                 )
             } catch (_: Exception) {
@@ -508,7 +749,8 @@ class OccasioNetRepository {
             priceDzd = priceDzd,
             condition = condition,
             status = "published",
-            contactPhone = contactPhone.trim()
+            contactPhone = contactPhone.trim(),
+            imageUrls = imageUrls
         )
         _myListings.value = listOf(newListing) + _myListings.value
         _myPaymentRequests.value = _myPaymentRequests.value.map {
@@ -593,7 +835,7 @@ class OccasioNetRepository {
             requireConfiguredService()?.signOut()
         } catch (_: Exception) {
         } finally {
-            SupabaseClientProvider.currentAccessToken = null
+            SupabaseClient.clearSession()
             _currentUser.value = null
             _myListings.value = emptyList()
             _myPaymentRequests.value = emptyList()

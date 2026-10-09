@@ -7,6 +7,7 @@ import dz.ocasionet.core.model.ListingFilter
 import dz.ocasionet.core.model.ListingItem
 import dz.ocasionet.core.model.PaymentMethodType
 import dz.ocasionet.core.model.PaymentRequestItem
+import dz.ocasionet.core.network.AuthCallbackResult
 import dz.ocasionet.core.repository.OccasioNetRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -57,7 +58,8 @@ data class PendingListingDraft(
     val wilayaCode: Int,
     val communeId: Int,
     val condition: ListingCondition,
-    val contactPhone: String
+    val contactPhone: String,
+    val imageUrls: List<String> = emptyList()
 )
 
 class UserViewModel(
@@ -74,7 +76,11 @@ class UserViewModel(
 
     fun completeSplash() {
         _backStack.clear()
-        _currentRoute.value = UserScreenRoute.WELCOME_AUTH
+        if (repository.currentUser.value != null) {
+            _currentRoute.value = UserScreenRoute.HOME
+        } else {
+            _currentRoute.value = UserScreenRoute.WELCOME_AUTH
+        }
     }
 
     fun replaySplash() {
@@ -104,7 +110,45 @@ class UserViewModel(
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
     init {
-        refreshPublicData()
+        viewModelScope.launch {
+            val savedPrefs = repository.syncLocalPreferencesFromDataStore()
+            if (savedPrefs.preferredWilayaCode != null ||
+                savedPrefs.preferredCategoryId != null ||
+                savedPrefs.preferredMinPriceDzd != null ||
+                savedPrefs.preferredMaxPriceDzd != null
+            ) {
+                _filter.value = _filter.value.copy(
+                    categoryId = savedPrefs.preferredCategoryId,
+                    wilayaCode = savedPrefs.preferredWilayaCode,
+                    communeId = savedPrefs.preferredCommuneId,
+                    minPriceDzd = savedPrefs.preferredMinPriceDzd,
+                    maxPriceDzd = savedPrefs.preferredMaxPriceDzd
+                )
+            }
+            repository.restoreSessionOnStartup()
+            repository.refreshPublicData()
+            repository.refreshUserPrivateData()
+        }
+    }
+
+    fun handleAuthCallbackDeepLink(rawUri: String?) {
+        if (rawUri.isNullOrBlank()) return
+        viewModelScope.launch {
+            when (val res = repository.handleAuthDeepLink(rawUri)) {
+                is AuthCallbackResult.EmailConfirmed -> {
+                    _feedbackBanner.value = "تم تأكيد بريدك الإلكتروني وتفعيل الجلسة بنجاح."
+                    navigateTo(UserScreenRoute.HOME)
+                }
+                is AuthCallbackResult.PasswordRecovery -> {
+                    _feedbackBanner.value = "يرجى إدخال كلمة المرور الجديدة لإتمام استعادة الحساب."
+                    navigateTo(UserScreenRoute.RESET_PASSWORD)
+                }
+                is AuthCallbackResult.Error -> {
+                    _feedbackBanner.value = res.messageAr
+                }
+                AuthCallbackResult.Ignored -> {}
+            }
+        }
     }
 
     fun navigateTo(route: UserScreenRoute) {
@@ -167,10 +211,69 @@ class UserViewModel(
             minPriceDzd = minPriceDzd,
             maxPriceDzd = maxPriceDzd
         )
+        viewModelScope.launch {
+            repository.updateFilterPreferences(
+                categoryId = categoryId,
+                wilayaCode = wilayaCode,
+                communeId = validCommune,
+                minPriceDzd = minPriceDzd,
+                maxPriceDzd = maxPriceDzd
+            )
+        }
     }
 
     fun resetFilter() {
         _filter.value = ListingFilter()
+        viewModelScope.launch {
+            repository.updateFilterPreferences(
+                categoryId = null,
+                wilayaCode = null,
+                communeId = null,
+                minPriceDzd = null,
+                maxPriceDzd = null
+            )
+        }
+    }
+
+    fun toggleDarkMode(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateDarkModePreference(enabled)
+            _feedbackBanner.value = if (enabled) {
+                "تم تفعيل الوضع الليلي الملكي وحفظه في DataStore."
+            } else {
+                "تم تفعيل الوضع النهاري وحفظه في DataStore."
+            }
+        }
+    }
+
+    fun toggleNotificationsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateNotificationsEnabled(enabled)
+            _feedbackBanner.value = if (enabled) {
+                "تم تفعيل تنبيهات الإشعارات محلياً."
+            } else {
+                "تم إيقاف تنبيهات الإشعارات محلياً."
+            }
+        }
+    }
+
+    fun setTermsAndPrivacyAccepted(accepted: Boolean) {
+        viewModelScope.launch {
+            repository.updateAcceptedTermsAndPrivacy(accepted)
+            _feedbackBanner.value = if (accepted) {
+                "تم تسجيل موافقتك على شروط الاستخدام وسياسة الخصوصية في DataStore."
+            } else {
+                "تم إلغاء حالة الموافقة المحفوظة محلياً."
+            }
+        }
+    }
+
+    fun clearAllLocalPreferences() {
+        _filter.value = ListingFilter()
+        viewModelScope.launch {
+            repository.clearSavedLocalPreferences()
+            _feedbackBanner.value = "تمت إعادة ضبط جميع التفضيلات المحلية والفلاتر المحفوظة."
+        }
     }
 
     fun refreshPublicData() {
@@ -283,6 +386,41 @@ class UserViewModel(
         }
     }
 
+    fun uploadDraftListingImage(
+        fileName: String,
+        mimeType: String,
+        fileBytes: ByteArray,
+        onUploaded: (String) -> Unit
+    ) {
+        if (_isBusy.value) return
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.uploadListingImage(fileName, mimeType, fileBytes)
+            _isBusy.value = false
+            res.onSuccess { url ->
+                _feedbackBanner.value = "تم رفع صورة الإعلان إلى حاوية listing-images بنجاح."
+                onUploaded(url)
+            }.onFailure { err ->
+                _feedbackBanner.value = err.message ?: "تعذر رفع صورة الإعلان."
+            }
+        }
+    }
+
+    fun deleteDraftListingImage(
+        imageUrl: String,
+        onDeleted: () -> Unit
+    ) {
+        viewModelScope.launch {
+            val res = repository.deleteListingImage(imageUrl)
+            res.onSuccess {
+                _feedbackBanner.value = "تم حذف صورة الإعلان من مجلدك الشخصي."
+                onDeleted()
+            }.onFailure { err ->
+                _feedbackBanner.value = err.message ?: "تعذر حذف صورة الإعلان."
+            }
+        }
+    }
+
     fun requestPublishListing(
         draft: PendingListingDraft,
         approvedPaymentRequestId: String? = null
@@ -298,7 +436,8 @@ class UserViewModel(
                 description = draft.description,
                 priceDzd = draft.priceDzd,
                 condition = draft.condition,
-                contactPhone = draft.contactPhone
+                contactPhone = draft.contactPhone,
+                imageUrls = draft.imageUrls
             )
         } else {
             val fee = repository.appSettings.value.listingFeeDzd
@@ -316,7 +455,8 @@ class UserViewModel(
         description: String,
         priceDzd: Long,
         condition: ListingCondition,
-        contactPhone: String
+        contactPhone: String,
+        imageUrls: List<String> = emptyList()
     ) {
         if (_isBusy.value) return
         viewModelScope.launch {
@@ -330,7 +470,8 @@ class UserViewModel(
                 description = description,
                 priceDzd = priceDzd,
                 condition = condition.dbValue,
-                contactPhone = contactPhone
+                contactPhone = contactPhone,
+                imageUrls = imageUrls
             )
             _isBusy.value = false
             res.onSuccess {

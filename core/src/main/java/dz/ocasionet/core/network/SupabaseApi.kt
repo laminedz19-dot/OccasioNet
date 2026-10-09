@@ -59,6 +59,11 @@ data class AuthPasswordUpdateRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class RefreshTokenRequest(
+    @Json(name = "refresh_token") val refreshToken: String
+)
+
+@JsonClass(generateAdapter = true)
 data class SupabaseAuthUserDto(
     @Json(name = "id") val id: String,
     @Json(name = "email") val email: String? = null,
@@ -69,6 +74,7 @@ data class SupabaseAuthUserDto(
 data class SupabaseSessionDto(
     @Json(name = "access_token") val accessToken: String? = null,
     @Json(name = "refresh_token") val refreshToken: String? = null,
+    @Json(name = "expires_in") val expiresIn: Long? = null,
     @Json(name = "user") val user: SupabaseAuthUserDto? = null
 )
 
@@ -146,6 +152,12 @@ interface SupabaseRestService {
 
     @POST("auth/v1/token?grant_type=password")
     suspend fun signInWithPassword(@Body body: AuthSignInRequest): Response<SupabaseSessionDto>
+
+    @POST("auth/v1/token?grant_type=refresh_token")
+    suspend fun refreshSession(@Body body: RefreshTokenRequest): Response<SupabaseSessionDto>
+
+    @GET("auth/v1/user")
+    suspend fun getCurrentAuthUser(): Response<SupabaseAuthUserDto>
 
     @POST("auth/v1/recover")
     suspend fun recoverPassword(@Body body: AuthEmailRequest): Response<Unit>
@@ -272,6 +284,12 @@ interface SupabaseRestService {
         @Path(value = "path", encoded = true) objectPath: String,
         @Header("Content-Type") mimeType: String,
         @Body fileBody: RequestBody
+    ): Response<Unit>
+
+    @DELETE("storage/v1/object/{bucket}/{path}")
+    suspend fun deleteStorageObject(
+        @Path("bucket") bucket: String,
+        @Path(value = "path", encoded = true) objectPath: String
     ): Response<Unit>
 
     @POST("storage/v1/object/sign/payment-receipts/{path}")

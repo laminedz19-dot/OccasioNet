@@ -80,7 +80,13 @@ class AdminRepository {
         if (token.isNullOrBlank() || userDto == null) {
             return@executeSingleFlight Result.failure(IllegalStateException("جلسة غير صالحة من Supabase Auth."))
         }
-        SupabaseClientProvider.currentAccessToken = token
+        dz.ocasionet.core.network.SupabaseClient.persistSession(
+            accessToken = token,
+            refreshToken = session.refreshToken.orEmpty(),
+            userId = userDto.id,
+            email = email.trim(),
+            expiresInSeconds = session.expiresIn ?: 3600L
+        )
 
         val verified = verifyAdminRoleFromServer()
         if (!verified) {
@@ -286,7 +292,7 @@ class AdminRepository {
             requireConfiguredService()?.signOut()
         } catch (_: Exception) {
         } finally {
-            SupabaseClientProvider.currentAccessToken = null
+            dz.ocasionet.core.network.SupabaseClient.clearSession()
             _isVerifiedAdmin.value = false
             clearAdminSensitiveState()
         }

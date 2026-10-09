@@ -2,13 +2,18 @@ package dz.ocasionet.core
 
 import dz.ocasionet.core.data.AlgeriaGeographyCatalog
 import dz.ocasionet.core.model.SupabaseConfigStatus
+import dz.ocasionet.core.network.AuthCallbackResult
+import dz.ocasionet.core.network.InMemoryEncryptedSessionStore
+import dz.ocasionet.core.network.SupabaseClient
 import dz.ocasionet.core.network.SupabaseClientProvider
 import dz.ocasionet.core.security.RlsPolicyVerifier
 import dz.ocasionet.core.security.SecurityViolationException
 import dz.ocasionet.core.security.SupabaseSchemaContract
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -18,7 +23,8 @@ import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 
 /**
- * اختبارات شاملة للـ 15 متطلباً أمنياً ووظيفياً لمنصة OccasioNet (RLS + RPC + Storage + Concurrency).
+ * اختبارات شاملة للـ 21 متطلباً أمنياً ووظيفياً لمنصة OccasioNet:
+ * (RLS + RPC + Storage + Concurrency + Session Persistence + Deep Links + Orphan Cleanup).
  */
 class OccasioNetSecurityAndDomainTest {
 
@@ -34,6 +40,8 @@ class OccasioNetSecurityAndDomainTest {
         engine.registerUser(userB, "buyer_seller_b@ocasionet.dz", "ياسين بوعلام")
         engine.registerUser(adminUser, "admin@ocasionet.dz", "مشرف النظام")
         engine.grantAdminRoleFromSqlEditorOnly(adminUser, sqlOperatorId = "postgres_superuser")
+        SupabaseClient.setSessionStoreForTesting(InMemoryEncryptedSessionStore())
+        SupabaseClient.clearSession()
     }
 
     @Test
@@ -249,7 +257,7 @@ class OccasioNetSecurityAndDomainTest {
             receiptStoragePath = pathA,
             receiptMimeType = "image/jpeg",
             receiptSizeBytes = 60_000L,
-            clientAttemptedAmountDzd = 1L // محاولة تلاعب من العميل لإرسال 1 دج بدلاً من 500 دج
+            clientAttemptedAmountDzd = 1L
         )
         assertEquals(500L, req.amountDzd)
     }
@@ -325,7 +333,6 @@ class OccasioNetSecurityAndDomainTest {
         assertEquals(12, SupabaseSchemaContract.REQUIRED_TABLES.size)
         assertEquals(7, SupabaseSchemaContract.REQUIRED_RPCS.size)
 
-        // التحقق من وجود ملفات SQL ومطابقتها لأسماء الجداول والدوال
         val rootDir = File("..").takeIf { File("../supabase/migrations").exists() } ?: File(".")
         val schemaFile = File(rootDir, "supabase/migrations/001_schema.sql")
         val funcFile = File(rootDir, "supabase/migrations/002_functions.sql")
@@ -343,7 +350,6 @@ class OccasioNetSecurityAndDomainTest {
 
     @Test
     fun `15 - disallowed MIME types, oversized files, and foreign folder paths are rejected in Storage`() {
-        // 1. نوع ملف تنفيذي غير مسموح به
         try {
             engine.uploadStorageFile(
                 callerUserId = userA,
@@ -357,7 +363,6 @@ class OccasioNetSecurityAndDomainTest {
             assertEquals("STORAGE_MIME_REJECTED", e.code)
         }
 
-        // 2. حجم ملف أكبر من 5MB
         try {
             engine.uploadStorageFile(
                 callerUserId = userA,
@@ -371,7 +376,6 @@ class OccasioNetSecurityAndDomainTest {
             assertEquals("STORAGE_SIZE_EXCEEDED", e.code)
         }
 
-        // 3. محاولة الرفع داخل مجلد مستخدم آخر
         try {
             engine.uploadStorageFile(
                 callerUserId = userA,
@@ -384,5 +388,343 @@ class OccasioNetSecurityAndDomainTest {
         } catch (e: SecurityViolationException) {
             assertEquals("STORAGE_FOLDER_VIOLATION", e.code)
         }
+    }
+
+    @Test
+    fun `16 - encrypted session persistence, expiration detection, and sign-out cleanup work reliably`() {
+        SupabaseClient.persistSession(
+            accessToken = "jwt_access_token_123",
+            refreshToken = "jwt_refresh_token_456",
+            userId = userA,
+            email = "buyer_seller_a@ocasionet.dz",
+            expiresInSeconds = 3600L,
+            nowEpochSeconds = 1_000_000L
+        )
+
+        val restored = SupabaseClient.restorePersistedSession()
+        assertNotNull(restored)
+        assertEquals("jwt_access_token_123", restored?.accessToken)
+        assertEquals("jwt_refresh_token_456", restored?.refreshToken)
+        assertEquals(userA, restored?.userId)
+
+        // قبل انتهاء الصلاحية
+        assertFalse(SupabaseClient.isAccessTokenExpired(nowEpochSeconds = 1_001_000L))
+        // بعد انتهاء الصلاحية
+        assertTrue(SupabaseClient.isAccessTokenExpired(nowEpochSeconds = 1_004_000L))
+
+        // مسح الجلسة عند تسجيل الخروج
+        SupabaseClient.clearSession()
+        assertNull(SupabaseClient.restorePersistedSession())
+        assertNull(SupabaseClient.currentAccessToken)
+    }
+
+    @Test
+    fun `17 - full RLS matrix for profiles, favorites, reports, notifications, and audit_logs`() {
+        // 1. Profiles: المستخدم يقرأ ملفه فقط، والمشرف يقرأ الجميع
+        assertEquals(1, engine.queryProfiles(userA).size)
+        assertEquals(3, engine.queryProfiles(adminUser).size)
+
+        // منع المستخدم A من تعديل ملف المستخدم B
+        try {
+            engine.updateProfileByClient(userA, userB, fullName = "اختراق")
+            fail("يجب منع المستخدم A من تعديل ملف المستخدم B")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RLS_PROFILE_UPDATE_OTHER_DENIED", e.code)
+        }
+
+        // منع المستخدم المحظور من فك الحظر عن نفسه
+        engine.adminSetUserBanStatusRpc(adminUser, userB, isBanned = true, banReason = "إساءة استخدام")
+        try {
+            engine.updateProfileByClient(userB, userB, attemptedIsBannedChange = false)
+            fail("يجب منع المستخدم المحظور من تغيير is_banned")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RLS_PROFILE_BAN_BYPASS_DENIED", e.code)
+        }
+        engine.adminSetUserBanStatusRpc(adminUser, userB, isBanned = false, banReason = null)
+
+        // 2. Favorites: منع القراءة أو الحذف عبر المستخدمين
+        val receiptPath = engine.uploadStorageFile(userA, "payment-receipts", "$userA/fav_rec.jpg", "image/jpeg", 90_000L)
+        val pay = engine.submitPaymentRequestRpc(userA, "ccp", receiptPath, "image/jpeg", 90_000L)
+        engine.reviewPaymentRequestRpc(adminUser, pay.id, "approved")
+        val communeId = AlgeriaGeographyCatalog.communesForWilaya(16).first().id
+        val listing = engine.createListingWithPaidReceiptRpc(
+            callerUserId = userA,
+            paymentRequestId = pay.id,
+            categoryId = 1,
+            wilayaCode = 16,
+            communeId = communeId,
+            title = "إعلان لاختبار المفضلة والبلاغات",
+            description = "وصف إعلان متكامل لاختبار صلاحيات المفضلة والبلاغات.",
+            priceDzd = 22000L,
+            condition = "good",
+            contactPhone = "0550123456"
+        )
+        engine.addFavorite(userA, userA, listing.id)
+        try {
+            engine.queryFavorites(userB, targetOwnerId = userA)
+            fail("يجب منع المستخدم B من قراءة مفضلة المستخدم A")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RLS_FAVORITES_SELECT_OTHER_DENIED", e.code)
+        }
+        try {
+            engine.removeFavorite(userB, targetUserId = userA, listingId = listing.id)
+            fail("يجب منع المستخدم B من حذف مفضلة المستخدم A")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RLS_FAVORITES_DELETE_OTHER_DENIED", e.code)
+        }
+
+        // 3. Reports: المستخدم يبلّغ عن إعلان منشور ولكن لا يستطيع قراءة جدول البلاغات
+        val report = engine.submitReport(userB, userB, listing.id, "محتوى مخالف", "تفاصيل البلاغ")
+        assertNotNull(report.id)
+        try {
+            engine.queryReports(userB)
+            fail("يجب منع المستخدم العادي من قراءة جدول البلاغات")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RLS_REPORTS_SELECT_DENIED", e.code)
+        }
+        assertEquals(1, engine.queryReports(adminUser).size)
+
+        // 4. Notifications: المستخدم يقرأ ويحدث إشعاراته فقط
+        val userANotifs = engine.queryNotifications(userA, userA)
+        assertTrue(userANotifs.isNotEmpty())
+        try {
+            engine.markNotificationRead(userB, userANotifs.first().id)
+            fail("يجب منع المستخدم B من تحديث إشعارات المستخدم A")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RLS_NOTIFICATIONS_UPDATE_OTHER_DENIED", e.code)
+        }
+
+        // 5. Audit Logs: للمشرف فقط
+        try {
+            engine.getAuditLogsForAdmin(userA)
+            fail("يجب منع المستخدم العادي من قراءة سجل التدقيق")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RLS_AUDIT_LOGS_DENIED", e.code)
+        }
+    }
+
+    @Test
+    fun `18 - RPC security for admin_set_user_ban_status, admin_update_app_settings, admin_moderate_listing, and email_confirmed`() {
+        // منع المستخدم العادي من استدعاء دوال الإدارة
+        try {
+            engine.adminSetUserBanStatusRpc(userA, userB, true, "محاولة غير مصرحة")
+            fail("يجب منع غير المشرف من حظر المستخدمين")
+        } catch (e: SecurityViolationException) {
+            assertEquals("FORBIDDEN_ADMIN_ONLY", e.code)
+        }
+
+        // تحديث السعر الخادمي من قبل المشرف
+        val updatedSettings = engine.adminUpdateAppSettingsRpc(
+            callerUserId = adminUser,
+            listingFeeDzd = 600L,
+            ccpInstructionsAr = "حساب CCP محدّث",
+            baridimobInstructionsAr = "حساب BaridiMob محدّث",
+            paymentNoticeAr = "تنبيه محدّث",
+            requireEmailConfirmation = true
+        )
+        assertEquals(600L, updatedSettings.listingFeeDzd)
+
+        // التحقق من رفض نشر إعلان عندما يكون require_email_confirmation=true والحساب غير مؤكد البريد
+        val unconfirmedUser = "33333333-3333-3333-3333-333333333333"
+        engine.registerUser(unconfirmedUser, "unconfirmed@ocasionet.dz", "مستخدم غير مؤكد", emailConfirmed = false)
+        val path = engine.uploadStorageFile(unconfirmedUser, "payment-receipts", "$unconfirmedUser/r.jpg", "image/jpeg", 50_000L)
+        val req = engine.submitPaymentRequestRpc(unconfirmedUser, "ccp", path, "image/jpeg", 50_000L)
+        engine.reviewPaymentRequestRpc(adminUser, req.id, "approved")
+        val communeId = AlgeriaGeographyCatalog.communesForWilaya(16).first().id
+
+        try {
+            engine.createListingWithPaidReceiptRpc(
+                callerUserId = unconfirmedUser,
+                paymentRequestId = req.id,
+                categoryId = 1,
+                wilayaCode = 16,
+                communeId = communeId,
+                title = "إعلان من حساب غير مؤكد البريد",
+                description = "محاولة نشر إعلان قبل تأكيد البريد الإلكتروني عندما يكون الشرط مفعلاً.",
+                priceDzd = 12000L,
+                condition = "good",
+                contactPhone = "0550001122"
+            )
+            fail("يجب رفض النشر إذا لم يكن البريد مؤكداً وكان الشرط مفعلاً")
+        } catch (e: SecurityViolationException) {
+            assertEquals("EMAIL_NOT_CONFIRMED", e.code)
+        }
+    }
+
+    @Test
+    fun `19 - listing-images bucket supports owner upload, public read, folder ownership verification, and owner delete`() {
+        val imgPath = engine.uploadStorageFile(
+            callerUserId = userA,
+            bucket = "listing-images",
+            objectPath = "$userA/phone_front.webp",
+            mimeType = "image/webp",
+            sizeBytes = 150_000L
+        )
+        // القراءة العامة متاحة للزوار ولأي مستخدم
+        assertNotNull(engine.readListingImagePublic(imgPath))
+
+        // لا يمكن للمستخدم A تمرير مسار صورة يخص المستخدم B عند نشر الإعلان
+        val receiptPath = engine.uploadStorageFile(userA, "payment-receipts", "$userA/r_img.jpg", "image/jpeg", 80_000L)
+        val req = engine.submitPaymentRequestRpc(userA, "ccp", receiptPath, "image/jpeg", 80_000L)
+        engine.reviewPaymentRequestRpc(adminUser, req.id, "approved")
+        val communeId = AlgeriaGeographyCatalog.communesForWilaya(16).first().id
+
+        try {
+            engine.createListingWithPaidReceiptRpc(
+                callerUserId = userA,
+                paymentRequestId = req.id,
+                categoryId = 1,
+                wilayaCode = 16,
+                communeId = communeId,
+                title = "إعلان بصورة خارج مجلد المالك",
+                description = "محاولة تمرير مسار صورة في مجلد مستخدم آخر.",
+                priceDzd = 25000L,
+                condition = "good",
+                contactPhone = "0550112233",
+                imageUrls = listOf("$userB/stolen_image.jpg")
+            )
+            fail("يجب رفض تمرير صورة خارج مجلد المستخدم المالك")
+        } catch (e: SecurityViolationException) {
+            assertEquals("FORBIDDEN_IMAGE_PATH", e.code)
+        }
+
+        // لا يمكن للمستخدم B حذف صورة المستخدم A
+        try {
+            engine.deleteStorageFile(userB, "listing-images", imgPath)
+            fail("يجب منع المستخدم B من حذف صورة المستخدم A")
+        } catch (e: SecurityViolationException) {
+            assertEquals("STORAGE_DELETE_FORBIDDEN", e.code)
+        }
+
+        // المالك نفسه يستطيع حذف صورته
+        assertTrue(engine.deleteStorageFile(userA, "listing-images", imgPath))
+    }
+
+    @Test
+    fun `20 - deep link callback parser handles signup confirmation, password recovery, and expired links`() = runBlocking {
+        val signupCallback =
+            "occasionet://auth-callback#access_token=tok_signup_1&refresh_token=ref_signup_1&expires_in=3600&type=signup"
+        val resSignup = SupabaseClient.handleAuthCallbackUri(signupCallback)
+        assertTrue(resSignup is AuthCallbackResult.EmailConfirmed)
+        assertEquals("tok_signup_1", SupabaseClient.currentAccessToken)
+
+        val recoveryCallback =
+            "occasionet://auth-callback#access_token=tok_rec_2&refresh_token=ref_rec_2&expires_in=3600&type=recovery"
+        val resRecovery = SupabaseClient.handleAuthCallbackUri(recoveryCallback)
+        assertTrue(resRecovery is AuthCallbackResult.PasswordRecovery)
+        assertEquals("tok_rec_2", SupabaseClient.currentAccessToken)
+
+        val expiredCallback =
+            "occasionet://auth-callback?error=access_denied&error_description=Email+link+is+invalid+or+has+expired"
+        val resExpired = SupabaseClient.handleAuthCallbackUri(expiredCallback)
+        assertTrue(resExpired is AuthCallbackResult.Error)
+    }
+
+    @Test
+    fun `21 - orphan receipt compensating delete cleans up unlinked file on RPC failure and forbids deleting linked receipt`() {
+        val orphanObjectPath = "$userA/orphan_receipt.jpg"
+
+        // 1. نجاح رفع الملف إلى Storage ثم فشل استدعاء RPC -> يتم حذف الملف اليتيم تعويضياً
+        try {
+            engine.uploadAndSubmitPaymentWithCompensation(
+                callerUserId = userA,
+                objectPath = orphanObjectPath,
+                mimeType = "image/jpeg",
+                sizeBytes = 100_000L,
+                paymentMethod = "ccp",
+                simulateRpcFailureAfterUpload = true
+            )
+            fail("يجب أن يرمي استثناء عند فشل RPC بعد الرفع")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RPC_TRANSIENT_FAILURE", e.code)
+        }
+        assertFalse(
+            "يجب حذف الملف اليتيم من Storage بعد فشل RPC",
+            engine.hasStorageFile("payment-receipts", orphanObjectPath)
+        )
+
+        // 2. إذا نجح الرفع ونجح تسجيل طلب الدفع، يُمنع حذف الإيصال المرتبط بطلب دفع قائم
+        val linkedReq = engine.uploadAndSubmitPaymentWithCompensation(
+            callerUserId = userA,
+            objectPath = "$userA/linked_receipt.jpg",
+            mimeType = "image/jpeg",
+            sizeBytes = 100_000L,
+            paymentMethod = "baridimob",
+            simulateRpcFailureAfterUpload = false
+        )
+        assertTrue(engine.hasStorageFile("payment-receipts", linkedReq.receiptStoragePath))
+
+        try {
+            engine.deleteStorageFile(userA, "payment-receipts", linkedReq.receiptStoragePath)
+            fail("يجب منع حذف إيصال دفع مرتبط بطلب دفع مسجل")
+        } catch (e: SecurityViolationException) {
+            assertEquals("RECEIPT_LINKED_CANNOT_DELETE", e.code)
+        }
+    }
+
+    @Test
+    fun `22 - DataStoreRepository manages local user preferences and encrypted auth tokens independently`() = runBlocking {
+        val tempFile = java.io.File.createTempFile("occasionet_test_prefs_", ".preferences_pb").apply {
+            deleteOnExit()
+        }
+        val repo = dz.ocasionet.core.repository.DataStoreRepository.createForTesting(tempFile)
+
+        // 1. التحقق من القيم الافتراضية لتفضيلات المستخدم المحلية
+        val initialPrefs = repo.getUserPreferences()
+        assertFalse(initialPrefs.darkModeEnabled)
+        assertNull(initialPrefs.preferredWilayaCode)
+        assertTrue(initialPrefs.notificationsEnabled)
+        assertEquals("ar", initialPrefs.languageCode)
+
+        // 2. تحديث تفضيلات المستخدم المحلية والفلاتر (الولاية، البلدية، الفئة، ونطاق السعر) والتحقق من حفظها واسترجاعها
+        repo.setDarkModeEnabled(true)
+        repo.saveFilterPreferences(
+            categoryId = 2,
+            wilayaCode = 16,
+            communeId = 1601,
+            minPriceDzd = 5_000L,
+            maxPriceDzd = 120_000L
+        )
+        repo.setAcceptedTermsAndPrivacy(true)
+
+        val updatedPrefs = repo.getUserPreferences()
+        assertTrue(updatedPrefs.darkModeEnabled)
+        assertEquals(16, updatedPrefs.preferredWilayaCode)
+        assertEquals(1601, updatedPrefs.preferredCommuneId)
+        assertEquals(2, updatedPrefs.preferredCategoryId)
+        assertEquals(5_000L, updatedPrefs.preferredMinPriceDzd)
+        assertEquals(120_000L, updatedPrefs.preferredMaxPriceDzd)
+        assertTrue(updatedPrefs.acceptedTermsAndPrivacy)
+
+        // 3. حفظ رموز المصادقة المشفرة عبر DataStoreRepository والتكامل مع SupabaseClient
+        SupabaseClient.setSessionStoreForTesting(repo)
+        SupabaseClient.persistSession(
+            accessToken = "ds_access_token_secret",
+            refreshToken = "ds_refresh_token_secret",
+            userId = userA,
+            email = "amina@occasionet.dz",
+            expiresInSeconds = 3600L,
+            nowEpochSeconds = 2_000_000L
+        )
+
+        assertEquals("ds_access_token_secret", repo.getAccessToken())
+        assertEquals("ds_refresh_token_secret", repo.getRefreshToken())
+        val loadedSession = repo.getAuthSession()
+        assertNotNull(loadedSession)
+        assertEquals(userA, loadedSession?.userId)
+
+        // التأكد من أن الملف المخزن على القرص لا يحتوي النص الصريح لرمز الوصول (مشفر بـ AES/GCM)
+        val rawBytes = tempFile.readBytes().toString(Charsets.UTF_8)
+        assertFalse(
+            "يجب ألا يُخزن رمز الوصول كنص صريح داخل ملف DataStore",
+            rawBytes.contains("ds_access_token_secret")
+        )
+
+        // 4. مسح رموز المصادقة عند تسجيل الخروج مع بقاء تفضيلات المستخدم المحلية سليمة
+        SupabaseClient.clearSession()
+        assertNull(repo.getAuthSession())
+        assertNull(repo.getAccessToken())
+        assertTrue(repo.getUserPreferences().darkModeEnabled)
+        assertEquals(16, repo.getUserPreferences().preferredWilayaCode)
     }
 }
