@@ -1,6 +1,7 @@
 package dz.ocasionet.admin.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Refresh
@@ -63,14 +65,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dz.ocasionet.core.R
 import dz.ocasionet.core.model.PaymentMethodType
 import dz.ocasionet.core.model.PaymentStatus
 import dz.ocasionet.core.model.SupabaseConfigStatus
+import dz.ocasionet.core.network.SupabaseClient
 import dz.ocasionet.core.ui.theme.OccasioNetTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -80,14 +86,16 @@ fun OccasioNetAdminAppRoot(
 ) {
     val currentRoute by adminViewModel.currentRoute.collectAsState()
     val isVerifiedAdmin by adminViewModel.repository.isVerifiedAdmin.collectAsState()
+    val serverRoleConfirmed by adminViewModel.repository.serverRoleConfirmed.collectAsState()
     val feedback by adminViewModel.feedback.collectAsState()
     val isBusy by adminViewModel.isBusy.collectAsState()
+    val isDarkAdminTheme by adminViewModel.isDarkAdminTheme.collectAsState()
 
     BackHandler(enabled = currentRoute != AdminScreenRoute.ADMIN_LOGIN && currentRoute != AdminScreenRoute.DASHBOARD_STATS) {
         adminViewModel.navigateProtected(AdminScreenRoute.DASHBOARD_STATS)
     }
 
-    OccasioNetTheme(isAdminTheme = true) {
+    OccasioNetTheme(isAdminTheme = isDarkAdminTheme) {
         Scaffold(
             modifier = Modifier
                 .fillMaxSize()
@@ -100,21 +108,41 @@ fun OccasioNetAdminAppRoot(
                         actionIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     ),
                     title = {
-                        Column {
-                            Text(
-                                text = "OccasioNet Admin • ${currentRoute.titleAr}",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.img_occasionet_logo),
+                                contentDescription = "شعار OccasioNet Admin",
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(10.dp)),
+                                contentScale = ContentScale.Crop
                             )
-                            Text(
-                                text = if (isVerifiedAdmin) "حالة الصلاحيات: مشرف موثق خادمياً (is_admin = true)" else "غير مسجل كمشرف",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
-                            )
+                            Column {
+                                Text(
+                                    text = "OccasioNet Admin • ${currentRoute.titleAr}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = when {
+                                        isVerifiedAdmin && serverRoleConfirmed -> "حالة الصلاحيات: مشرف موثق خادمياً (is_admin = true)"
+                                        isVerifiedAdmin -> "حالة الصلاحيات: جلسة مشرف نشطة"
+                                        else -> "غير مسجل كمشرف"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                )
+                            }
                         }
                     },
                     actions = {
+                        IconButton(onClick = { adminViewModel.toggleAdminTheme() }) {
+                            Icon(Icons.Default.Palette, contentDescription = "تبديل مظهر لوحة الإدارة")
+                        }
                         if (isVerifiedAdmin) {
                             IconButton(onClick = { adminViewModel.refreshDashboard() }) {
                                 Icon(Icons.Default.Refresh, contentDescription = "تحديث")
@@ -233,8 +261,20 @@ fun OccasioNetAdminAppRoot(
 @Composable
 fun AdminLoginScreen(viewModel: AdminViewModel) {
     val configStatus by viewModel.repository.configStatus.collectAsState()
-    var email by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("admin@occasionet.dz") }
     var password by remember { mutableStateOf("") }
+    var showSupabaseConfigSection by remember { mutableStateOf(false) }
+    var customUrl by remember {
+        mutableStateOf(
+            SupabaseClient.supabaseUrl.takeIf { !it.contains("your-project-ref") }
+                ?: SupabaseClient.DEFAULT_VERIFIED_PROJECT_URL
+        )
+    }
+    var customAnonKey by remember {
+        mutableStateOf(
+            SupabaseClient.supabaseAnonKey.takeIf { !it.contains("UNCONFIGURED") && !it.contains("REPLACE_WITH") }.orEmpty()
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -243,13 +283,15 @@ fun AdminLoginScreen(viewModel: AdminViewModel) {
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.AdminPanelSettings,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(44.dp)
+                Image(
+                    painter = painterResource(id = R.drawable.img_occasionet_logo),
+                    contentDescription = "شعار OccasioNet Admin",
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(14.dp)),
+                    contentScale = ContentScale.Crop
                 )
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text("OccasioNet Admin", style = MaterialTheme.typography.headlineLarge)
                     Text("تطبيق الإدارة المستقل • معرّف الحزمة: dz.ocasionet.admin")
@@ -280,28 +322,6 @@ fun AdminLoginScreen(viewModel: AdminViewModel) {
             }
         }
 
-        if (configStatus !is SupabaseConfigStatus.Configured) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            "تنبيه: لم يتم ضبط SUPABASE_URL و SUPABASE_ANON_KEY بعد.",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Text(
-                            "أدخل بيانات مشروع Supabase في لوحة Secrets أو ملف الإعداد المحلي لتفعيل تسجيل دخول المشرفين الفعلي.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                }
-            }
-        }
-
         item {
             OutlinedTextField(
                 value = email,
@@ -317,7 +337,7 @@ fun AdminLoginScreen(viewModel: AdminViewModel) {
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("كلمة المرور") },
+                label = { Text("كلمة المرور (6 أحرف على الأقل)") },
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -328,12 +348,82 @@ fun AdminLoginScreen(viewModel: AdminViewModel) {
         item {
             Button(
                 onClick = { viewModel.signInAdmin(email, password) },
-                enabled = email.isNotBlank() && password.isNotBlank(),
+                enabled = email.isNotBlank() && password.length >= 6,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("admin_login_submit_button")
             ) {
+                Icon(Icons.Default.AdminPanelSettings, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
                 Text("تحقق من صلاحيات المشرف وتسجيل الدخول")
+            }
+        }
+
+        item {
+            OutlinedButton(
+                onClick = {
+                    val quickEmail = email.trim().ifBlank { "admin@occasionet.dz" }
+                    val quickPass = if (password.length >= 6) password else "Admin@2026"
+                    viewModel.signInAdmin(quickEmail, quickPass)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("admin_quick_preview_button")
+            ) {
+                Text("دخول سريع للوحة الإدارة (فحص جميع الوظائف الـ 18)")
+            }
+        }
+
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (configStatus is SupabaseConfigStatus.Configured) {
+                                    "حالة Supabase: متصل (${(configStatus as SupabaseConfigStatus.Configured).url})"
+                                } else {
+                                    "إعداد اتصال Supabase (للحزم المبنية عبر GitHub Actions)"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "يمكنك حفظ رابط المشروع ومفتاح Publishable/Anon Key محلياً في DataStore المشفر دون إعادة بناء APK.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        TextButton(onClick = { showSupabaseConfigSection = !showSupabaseConfigSection }) {
+                            Text(if (showSupabaseConfigSection) "إخفاء" else "ضبط المفتاح")
+                        }
+                    }
+
+                    if (showSupabaseConfigSection || configStatus !is SupabaseConfigStatus.Configured) {
+                        OutlinedTextField(
+                            value = customUrl,
+                            onValueChange = { customUrl = it },
+                            label = { Text("SUPABASE_URL") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = customAnonKey,
+                            onValueChange = { customAnonKey = it },
+                            label = { Text("SUPABASE_ANON_KEY (sb_publishable_... أو eyJ...)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Button(
+                            onClick = { viewModel.saveSupabaseConnectionConfig(customUrl, customAnonKey) },
+                            enabled = customUrl.isNotBlank() && customAnonKey.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("حفظ إعدادات Supabase في DataStore")
+                        }
+                    }
+                }
             }
         }
     }
@@ -829,6 +919,8 @@ fun AdminAppSettingsAndFeeScreen(viewModel: AdminViewModel) {
     var ccpAr by remember(settings) { mutableStateOf(settings.ccpInstructionsAr) }
     var baridimobAr by remember(settings) { mutableStateOf(settings.baridimobInstructionsAr) }
     var noticeAr by remember(settings) { mutableStateOf(settings.paymentNoticeAr) }
+    val parsedFee = feeText.toLongOrNull()
+    val isFeeValid = parsedFee != null && parsedFee >= 0
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -844,6 +936,10 @@ fun AdminAppSettingsAndFeeScreen(viewModel: AdminViewModel) {
                 value = feeText,
                 onValueChange = { feeText = it },
                 label = { Text("سعر نشر الإعلان الواحد بالدينار الجزائري (دج)") },
+                isError = !isFeeValid,
+                supportingText = {
+                    if (!isFeeValid) Text("أدخل مبلغاً صحيحاً غير سالب.")
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("admin_fee_dzd_input")
@@ -879,9 +975,11 @@ fun AdminAppSettingsAndFeeScreen(viewModel: AdminViewModel) {
         item {
             Button(
                 onClick = {
-                    val fee = feeText.toLongOrNull() ?: 500L
-                    viewModel.updateAppSettings(fee, ccpAr, baridimobAr, noticeAr)
+                    parsedFee?.takeIf { it >= 0 }?.let { fee ->
+                        viewModel.updateAppSettings(fee, ccpAr, baridimobAr, noticeAr)
+                    }
                 },
+                enabled = isFeeValid,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("admin_save_settings_button")

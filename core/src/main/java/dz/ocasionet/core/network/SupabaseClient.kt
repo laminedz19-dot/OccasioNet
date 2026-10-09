@@ -9,6 +9,9 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dz.ocasionet.core.BuildConfig
 import dz.ocasionet.core.model.SupabaseConfigStatus
+import dz.ocasionet.core.ui.theme.AppColorPalette
+import dz.ocasionet.core.ui.theme.OccasioNetPaletteStore
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.Interceptor
@@ -23,6 +26,11 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+
+internal fun authorizationHeaderForApiKey(apiKey: String, accessToken: String?): String? {
+    accessToken?.takeIf { it.isNotBlank() }?.let { return "Bearer $it" }
+    return if (apiKey.startsWith("sb_publishable_")) null else "Bearer $apiKey"
+}
 
 @JsonClass(generateAdapter = true)
 data class PersistedAuthSession(
@@ -170,15 +178,16 @@ class AndroidKeystoreSessionStore(context: Context) : SecureSessionStore {
 }
 
 /**
- * تهيئة عميل Supabase المشترك في وحدة `:core` باستخدام متغيرات البيئة:
+ * تهيئة عميل Supabase المشترك في وحدة `:core` باستخدام متغيرات البيئة أو الإعداد المحلي في DataStore:
  * - `SUPABASE_URL` أو `URL`
- * - `SUPABASE_ANON_KEY` أو `ANON_KEY`
+ * - `SUPABASE_ANON_KEY` أو `ANON_KEY` (يدعم مفاتيح `sb_publishable_` دون إرسالها كـ Bearer JWT)
  *
  * يدير الجلسة المشفرة وتجديد `refresh_token` التلقائي ومعالجة روابط Deep Links.
  */
 object SupabaseClient {
 
     const val DEEP_LINK_CALLBACK_URI = "occasionet://auth-callback"
+    const val DEFAULT_VERIFIED_PROJECT_URL = "https://oxdsyhvsntmvzeouqvrr.supabase.co"
 
     @Volatile
     private var sessionStore: SecureSessionStore = InMemoryEncryptedSessionStore()
@@ -199,6 +208,12 @@ object SupabaseClient {
     var currentTokenExpiresAtEpochSeconds: Long = 0L
 
     @Volatile
+    private var runtimeSupabaseUrlOverride: String? = null
+
+    @Volatile
+    private var runtimeSupabaseAnonKeyOverride: String? = null
+
+    @Volatile
     private var cachedService: SupabaseRestService? = null
 
     @Volatile
@@ -214,7 +229,32 @@ object SupabaseClient {
         val repo = dz.ocasionet.core.repository.DataStoreRepository.getInstance(context)
         dataStoreRepository = repo
         sessionStore = repo
+        runCatching {
+            val prefs = runBlocking { repo.getUserPreferences() }
+            if (!prefs.customSupabaseUrl.isNullOrBlank()) {
+                runtimeSupabaseUrlOverride = prefs.customSupabaseUrl
+            }
+            if (!prefs.customSupabaseAnonKey.isNullOrBlank()) {
+                runtimeSupabaseAnonKeyOverride = prefs.customSupabaseAnonKey
+            }
+            if (prefs.darkModeEnabled) {
+                OccasioNetPaletteStore.selectPalette(AppColorPalette.OCCASIONET_LOGO_DARK)
+            }
+        }
         restorePersistedSession()
+    }
+
+    /**
+     * تحديث رابط ومفتاح Supabase العام أثناء التشغيل وحفظهما محلياً في DataStore.
+     */
+    suspend fun updateRuntimeSupabaseConfig(url: String?, anonKey: String?): SupabaseConfigStatus {
+        val cleanUrl = url?.trim()?.takeIf { it.isNotBlank() }
+        val cleanKey = anonKey?.trim()?.takeIf { it.isNotBlank() }
+        runtimeSupabaseUrlOverride = cleanUrl
+        runtimeSupabaseAnonKeyOverride = cleanKey
+        cachedService = null
+        dataStoreRepository?.setCustomSupabaseConfig(cleanUrl, cleanKey)
+        return inspectConfig()
     }
 
     /**
@@ -222,6 +262,8 @@ object SupabaseClient {
      */
     fun setSessionStoreForTesting(store: SecureSessionStore) {
         sessionStore = store
+        runtimeSupabaseUrlOverride = null
+        runtimeSupabaseAnonKeyOverride = null
         if (store is dz.ocasionet.core.repository.DataStoreRepository) {
             dataStoreRepository = store
         }
@@ -406,10 +448,12 @@ object SupabaseClient {
     }
 
     /**
-     * قراءة رابط مشروع Supabase من متغيرات البيئة (`SUPABASE_URL` أو `URL`).
+     * قراءة رابط مشروع Supabase من الإعداد المحلي أو متغيرات البيئة (`SUPABASE_URL` أو `URL`).
      */
     val supabaseUrl: String
         get() {
+            val runtime = runtimeSupabaseUrlOverride?.trim().orEmpty()
+            if (!isPlaceholder(runtime)) return runtime
             val primary = BuildConfig.SUPABASE_URL.trim()
             return if (isPlaceholder(primary)) {
                 BuildConfig.URL.trim()
@@ -419,10 +463,12 @@ object SupabaseClient {
         }
 
     /**
-     * قراءة المفتاح العام `ANON_KEY` من متغيرات البيئة (`SUPABASE_ANON_KEY` أو `ANON_KEY`).
+     * قراءة المفتاح العام `ANON_KEY` من الإعداد المحلي أو متغيرات البيئة (`SUPABASE_ANON_KEY` أو `ANON_KEY`).
      */
     val supabaseAnonKey: String
         get() {
+            val runtime = runtimeSupabaseAnonKeyOverride?.trim().orEmpty()
+            if (!isPlaceholder(runtime)) return runtime
             val primary = BuildConfig.SUPABASE_ANON_KEY.trim()
             return if (isPlaceholder(primary)) {
                 BuildConfig.ANON_KEY.trim()
@@ -441,6 +487,8 @@ object SupabaseClient {
         val clean = value.trim()
         return clean.isEmpty() ||
             clean.contains("UNCONFIGURED", ignoreCase = true) ||
+            clean.contains("REPLACE_WITH", ignoreCase = true) ||
+            clean.contains("CHANGEME", ignoreCase = true) ||
             clean.contains("your-project-ref", ignoreCase = true)
     }
 
@@ -484,11 +532,14 @@ object SupabaseClient {
         }
 
         val authInterceptor = Interceptor { chain ->
-            val token = currentAccessToken?.takeIf { it.isNotBlank() } ?: anonKey
-            val req = chain.request().newBuilder()
-                .header("apikey", anonKey)
-                .header("Authorization", "Bearer $token")
-                .build()
+            val reqBuilder = chain.request().newBuilder().header("apikey", anonKey)
+            val authorization = authorizationHeaderForApiKey(anonKey, currentAccessToken)
+            if (authorization == null) {
+                reqBuilder.removeHeader("Authorization")
+            } else {
+                reqBuilder.header("Authorization", authorization)
+            }
+            val req = reqBuilder.build()
             chain.proceed(req)
         }
 

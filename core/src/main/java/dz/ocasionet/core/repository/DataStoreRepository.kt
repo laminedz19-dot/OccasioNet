@@ -48,7 +48,9 @@ data class LocalUserPreferences(
     val preferredMaxPriceDzd: Long? = null,
     val notificationsEnabled: Boolean = true,
     val acceptedTermsAndPrivacy: Boolean = false,
-    val languageCode: String = "ar"
+    val languageCode: String = "ar",
+    val customSupabaseUrl: String? = null,
+    val customSupabaseAnonKey: String? = null
 )
 
 /**
@@ -98,12 +100,28 @@ class AesGcmTokenCipher : TokenCipher {
         }
     }
 
+    private fun encodeBase64(bytes: ByteArray): String {
+        return try {
+            java.util.Base64.getEncoder().encodeToString(bytes)
+        } catch (_: Throwable) {
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+        }
+    }
+
+    private fun decodeBase64(encoded: String): ByteArray {
+        return try {
+            java.util.Base64.getDecoder().decode(encoded)
+        } catch (_: Throwable) {
+            Base64.decode(encoded, Base64.NO_WRAP)
+        }
+    }
+
     override fun encrypt(plainText: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
-        val ivEncoded = java.util.Base64.getEncoder().encodeToString(cipher.iv)
+        val ivEncoded = encodeBase64(cipher.iv)
         val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
-        val payloadEncoded = java.util.Base64.getEncoder().encodeToString(encryptedBytes)
+        val payloadEncoded = encodeBase64(encryptedBytes)
         return "$ivEncoded:$payloadEncoded"
     }
 
@@ -111,16 +129,8 @@ class AesGcmTokenCipher : TokenCipher {
         val parts = cipherText.split(":", limit = 2)
         if (parts.size != 2) return null
         return try {
-            val iv = try {
-                java.util.Base64.getDecoder().decode(parts[0])
-            } catch (_: Exception) {
-                Base64.decode(parts[0], Base64.NO_WRAP)
-            }
-            val payload = try {
-                java.util.Base64.getDecoder().decode(parts[1])
-            } catch (_: Exception) {
-                Base64.decode(parts[1], Base64.NO_WRAP)
-            }
+            val iv = decodeBase64(parts[0])
+            val payload = decodeBase64(parts[1])
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(128, iv))
             cipher.doFinal(payload).toString(Charsets.UTF_8)
@@ -154,6 +164,8 @@ class DataStoreRepository(
         val NOTIFICATIONS_ENABLED = booleanPreferencesKey("pref_notifications_enabled")
         val ACCEPTED_TERMS_AND_PRIVACY = booleanPreferencesKey("pref_accepted_terms_and_privacy")
         val LANGUAGE_CODE = stringPreferencesKey("pref_language_code")
+        val CUSTOM_SUPABASE_URL = stringPreferencesKey("pref_custom_supabase_url")
+        val ENCRYPTED_CUSTOM_SUPABASE_ANON_KEY = stringPreferencesKey("pref_encrypted_custom_supabase_anon_key")
 
         // مفاتيح رموز المصادقة والجلسة (يتم تشفير الرموز بـ AES/GCM قبل تخزينها)
         val ENCRYPTED_ACCESS_TOKEN = stringPreferencesKey("auth_encrypted_access_token")
@@ -176,6 +188,8 @@ class DataStoreRepository(
      * تدفق تفضيلات المستخدم المحلية بشكل تفاعلي.
      */
     val userPreferencesFlow: Flow<LocalUserPreferences> = safePreferencesFlow.map { prefs ->
+        val encAnonKey = prefs[Keys.ENCRYPTED_CUSTOM_SUPABASE_ANON_KEY]
+        val decAnonKey = encAnonKey?.let { tokenCipher.decrypt(it) }
         LocalUserPreferences(
             darkModeEnabled = prefs[Keys.DARK_MODE_ENABLED] ?: false,
             preferredWilayaCode = prefs[Keys.PREFERRED_WILAYA_CODE],
@@ -185,7 +199,9 @@ class DataStoreRepository(
             preferredMaxPriceDzd = prefs[Keys.PREFERRED_MAX_PRICE_DZD],
             notificationsEnabled = prefs[Keys.NOTIFICATIONS_ENABLED] ?: true,
             acceptedTermsAndPrivacy = prefs[Keys.ACCEPTED_TERMS_AND_PRIVACY] ?: false,
-            languageCode = prefs[Keys.LANGUAGE_CODE] ?: "ar"
+            languageCode = prefs[Keys.LANGUAGE_CODE] ?: "ar",
+            customSupabaseUrl = prefs[Keys.CUSTOM_SUPABASE_URL],
+            customSupabaseAnonKey = decAnonKey
         )
     }
 
@@ -231,6 +247,23 @@ class DataStoreRepository(
     suspend fun setDarkModeEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[Keys.DARK_MODE_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setCustomSupabaseConfig(url: String?, anonKey: String?) {
+        val cleanUrl = url?.trim().orEmpty()
+        val cleanKey = anonKey?.trim().orEmpty()
+        dataStore.edit { prefs ->
+            if (cleanUrl.isBlank()) {
+                prefs.remove(Keys.CUSTOM_SUPABASE_URL)
+            } else {
+                prefs[Keys.CUSTOM_SUPABASE_URL] = cleanUrl
+            }
+            if (cleanKey.isBlank()) {
+                prefs.remove(Keys.ENCRYPTED_CUSTOM_SUPABASE_ANON_KEY)
+            } else {
+                prefs[Keys.ENCRYPTED_CUSTOM_SUPABASE_ANON_KEY] = tokenCipher.encrypt(cleanKey)
+            }
         }
     }
 
@@ -325,6 +358,8 @@ class DataStoreRepository(
             prefs.remove(Keys.NOTIFICATIONS_ENABLED)
             prefs.remove(Keys.ACCEPTED_TERMS_AND_PRIVACY)
             prefs.remove(Keys.LANGUAGE_CODE)
+            prefs.remove(Keys.CUSTOM_SUPABASE_URL)
+            prefs.remove(Keys.ENCRYPTED_CUSTOM_SUPABASE_ANON_KEY)
         }
     }
 

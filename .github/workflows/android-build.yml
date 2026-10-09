@@ -57,8 +57,8 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: 7. Run Unit & Security Tests (22 Scenarios)
-        run: gradle :core:testDebugUnitTest :app:testDebugUnitTest
+      - name: 7. Run Unit & Security Tests (Core, UserApp, AdminApp)
+        run: gradle :core:testDebugUnitTest :app:testDebugUnitTest :adminApp:testDebugUnitTest
 
       - name: 8. Build OccasioNet User APK (:userApp)
         run: |
