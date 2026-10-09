@@ -28,10 +28,14 @@ CREATE POLICY "profiles_update_own_safe"
     ON public.profiles FOR UPDATE
     TO authenticated
     USING (auth.uid() = id AND is_banned = FALSE)
-    WITH CHECK (
-        auth.uid() = id
-        AND is_banned = (SELECT p.is_banned FROM public.profiles p WHERE p.id = auth.uid())
-    );
+    WITH CHECK (auth.uid() = id AND is_banned = FALSE);
+
+-- لا تسمح للعميل بتغيير أعمدة الهوية أو الحظر أو البريد المؤكد.
+REVOKE UPDATE ON TABLE public.profiles FROM PUBLIC, anon, authenticated;
+REVOKE UPDATE (id, email, full_name, phone, wilaya_code, commune_id, avatar_url, is_banned, ban_reason, email_confirmed, created_at, updated_at)
+    ON TABLE public.profiles FROM PUBLIC, anon, authenticated;
+GRANT UPDATE (full_name, phone, wilaya_code, commune_id, avatar_url)
+    ON TABLE public.profiles TO authenticated;
 
 -- 2. سياسات user_roles (ممنوع على أي مستخدم تعديل دوره من العميل)
 DROP POLICY IF EXISTS "user_roles_select_own_or_admin" ON public.user_roles;
@@ -97,11 +101,14 @@ CREATE POLICY "listings_update_owner"
     ON public.listings FOR UPDATE
     TO authenticated
     USING (auth.uid() = seller_id AND status IN ('published', 'sold', 'paused'))
-    WITH CHECK (
-        auth.uid() = seller_id
-        AND status IN ('published', 'sold', 'paused')
-        AND payment_request_id = (SELECT l.payment_request_id FROM public.listings l WHERE l.id = id)
-    );
+    WITH CHECK (auth.uid() = seller_id AND status IN ('published', 'sold', 'paused'));
+
+-- امنع تغيير الملكية أو علاقة الدفع/الإعلان مباشرة؛ يسمح التطبيق فقط بتعديل المحتوى والحالة.
+REVOKE UPDATE ON TABLE public.listings FROM PUBLIC, anon, authenticated;
+REVOKE UPDATE (id, seller_id, payment_request_id, category_id, wilaya_code, commune_id, title, description, price_dzd, condition, status, contact_phone, image_urls, views_count, created_at, updated_at)
+    ON TABLE public.listings FROM PUBLIC, anon, authenticated;
+GRANT UPDATE (title, description, price_dzd, status)
+    ON TABLE public.listings TO authenticated;
 
 -- 6. سياسات favorites
 DROP POLICY IF EXISTS "favorites_manage_own" ON public.favorites;

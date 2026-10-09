@@ -190,7 +190,11 @@ class UserViewModel(
                 _feedbackBanner.value = msg
                 navigateTo(UserScreenRoute.HOME)
             }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "فشل إنشاء الحساب."
+                val message = err.message ?: "فشل إنشاء الحساب."
+                _feedbackBanner.value = message
+                if (message.contains("يلزم تأكيد البريد الإلكتروني")) {
+                    navigateTo(UserScreenRoute.EMAIL_CONFIRMATION)
+                }
             }
         }
     }

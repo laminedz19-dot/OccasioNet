@@ -417,6 +417,10 @@ BEGIN
         updated_at = NOW()
     WHERE id = p_target_user_id;
 
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'NOT_FOUND: المستخدم المستهدف غير موجود.';
+    END IF;
+
     INSERT INTO public.audit_logs (actor_id, action_type, target_table, target_id, metadata)
     VALUES (
         auth.uid(),
@@ -462,6 +466,10 @@ BEGIN
         updated_at = NOW()
     WHERE id = 1;
 
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'NOT_FOUND: إعدادات التطبيق غير مهيأة.';
+    END IF;
+
     INSERT INTO public.audit_logs (actor_id, action_type, target_table, target_id, metadata)
     VALUES (
         auth.uid(),
@@ -501,6 +509,10 @@ BEGIN
     SET status = p_new_status,
         updated_at = NOW()
     WHERE id = p_listing_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'NOT_FOUND: الإعلان المستهدف غير موجود.';
+    END IF;
 
     INSERT INTO public.audit_logs (actor_id, action_type, target_table, target_id, metadata)
     VALUES (

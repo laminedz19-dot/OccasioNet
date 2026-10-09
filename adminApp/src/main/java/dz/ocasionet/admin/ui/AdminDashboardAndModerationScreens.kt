@@ -794,6 +794,8 @@ fun AdminAppSettingsAndFeeScreen(viewModel: AdminViewModel) {
     var ccpAr by remember(settings) { mutableStateOf(settings.ccpInstructionsAr) }
     var baridimobAr by remember(settings) { mutableStateOf(settings.baridimobInstructionsAr) }
     var noticeAr by remember(settings) { mutableStateOf(settings.paymentNoticeAr) }
+    val parsedFee = feeText.toLongOrNull()
+    val isFeeValid = parsedFee != null && parsedFee >= 0
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -809,6 +811,10 @@ fun AdminAppSettingsAndFeeScreen(viewModel: AdminViewModel) {
                 value = feeText,
                 onValueChange = { feeText = it },
                 label = { Text("سعر نشر الإعلان الواحد بالدينار الجزائري (دج)") },
+                isError = !isFeeValid,
+                supportingText = {
+                    if (!isFeeValid) Text("أدخل مبلغًا صحيحًا غير سالب.")
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("admin_fee_dzd_input")
@@ -844,9 +850,11 @@ fun AdminAppSettingsAndFeeScreen(viewModel: AdminViewModel) {
         item {
             Button(
                 onClick = {
-                    val fee = feeText.toLongOrNull() ?: 500L
-                    viewModel.updateAppSettings(fee, ccpAr, baridimobAr, noticeAr)
+                    parsedFee?.takeIf { it >= 0 }?.let { fee ->
+                        viewModel.updateAppSettings(fee, ccpAr, baridimobAr, noticeAr)
+                    }
                 },
+                enabled = isFeeValid,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("admin_save_settings_button")
