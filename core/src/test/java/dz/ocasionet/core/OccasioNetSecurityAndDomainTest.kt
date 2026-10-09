@@ -344,12 +344,18 @@ class OccasioNetSecurityAndDomainTest {
         assertEquals("يجب أن توجد أربع ترحيلات مرتبة", 4, migrations.size)
         val schemaSql = migrations.first { it.name.endsWith("_schema.sql") }.readText()
         val funcSql = migrations.first { it.name.endsWith("_functions.sql") }.readText()
+        val rlsSql = migrations.first { it.name.endsWith("_rls_and_storage.sql") }.readText()
         SupabaseSchemaContract.REQUIRED_TABLES.forEach { table ->
             assertTrue("الجدول $table يجب أن يكون معرفاً في الترحيل الأساسي", schemaSql.contains("public.$table"))
         }
         SupabaseSchemaContract.REQUIRED_RPCS.forEach { rpc ->
             assertTrue("الدالة $rpc يجب أن تكون معرفة في ترحيل الدوال", funcSql.contains("public.$rpc"))
         }
+        assertTrue("طلب الدفع يجب أن يتحقق من وجود ملف الإيصال", funcSql.contains("FROM storage.objects AS o"))
+        assertTrue("نشر الإعلان يجب أن يفرض تأكيد البريد وفق الإعداد", funcSql.contains("EMAIL_NOT_CONFIRMED"))
+        assertTrue("تحديث المستخدم غير الموجود يجب أن يفشل", funcSql.contains("USER_NOT_FOUND"))
+        assertTrue("الإعلان غير الموجود يجب ألا ينجح إشرافه", funcSql.contains("LISTING_NOT_FOUND"))
+        assertTrue("إدراج البلاغ يجب ألا يمنح العميل أعمدة المراجعة", rlsSql.contains("GRANT INSERT (listing_id, reporter_id, reason, details) ON public.reports"))
     }
 
     @Test

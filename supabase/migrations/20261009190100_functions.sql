@@ -324,6 +324,11 @@ BEGIN
         RAISE EXCEPTION 'ACCOUNT_BANNED: حسابك موقوف ولا يمكنك نشر إعلانات.';
     END IF;
 
+    IF COALESCE((SELECT require_email_confirmation FROM public.app_settings WHERE id = 1), TRUE)
+       AND v_profile.email_confirmed IS NOT TRUE THEN
+        RAISE EXCEPTION 'EMAIL_NOT_CONFIRMED: يجب تأكيد البريد الإلكتروني قبل نشر الإعلان.';
+    END IF;
+
     -- التحقق من ارتباط البلدية بالولاية المختارة
     SELECT wilaya_code INTO v_commune_wilaya
     FROM public.communes
@@ -493,6 +498,10 @@ BEGIN
         updated_by = auth.uid(),
         updated_at = NOW()
     WHERE id = 1;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'SETTINGS_NOT_FOUND: إعدادات التطبيق غير موجودة.';
+    END IF;
 
     INSERT INTO public.audit_logs (actor_id, action_type, target_table, target_id, metadata)
     VALUES (

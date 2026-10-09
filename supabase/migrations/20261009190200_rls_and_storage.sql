@@ -112,7 +112,13 @@ DROP POLICY IF EXISTS "reports_insert_authenticated" ON public.reports;
 CREATE POLICY "reports_insert_authenticated"
     ON public.reports FOR INSERT
     TO authenticated
-    WITH CHECK (auth.uid() = reporter_id);
+    WITH CHECK (
+        auth.uid() = reporter_id
+        AND status = 'open'
+        AND reviewed_by IS NULL
+        AND reviewed_at IS NULL
+        AND admin_note IS NULL
+    );
 
 DROP POLICY IF EXISTS "reports_select_own_or_admin" ON public.reports;
 CREATE POLICY "reports_select_own_or_admin"
@@ -244,7 +250,7 @@ GRANT UPDATE (category_id, wilaya_code, commune_id, title, description, price_dz
     condition, status, contact_phone, image_urls) ON public.listings TO authenticated;
 
 GRANT INSERT, DELETE ON public.favorites TO authenticated;
-GRANT INSERT ON public.reports TO authenticated;
+GRANT INSERT (listing_id, reporter_id, reason, details) ON public.reports TO authenticated;
 GRANT UPDATE (status, reviewed_by, reviewed_at, admin_note) ON public.reports TO authenticated;
 GRANT UPDATE (is_read) ON public.notifications TO authenticated;
 
