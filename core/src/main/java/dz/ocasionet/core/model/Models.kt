@@ -218,8 +218,15 @@ data class ListingFilter(
     val communeId: Int? = null,
     val condition: ListingCondition? = null,
     val minPriceDzd: Long? = null,
-    val maxPriceDzd: Long? = null
+    val maxPriceDzd: Long? = null,
+    val sortOrder: ListingSortOrder = ListingSortOrder.NEWEST
 )
+
+enum class ListingSortOrder(val labelAr: String) {
+    NEWEST("الأحدث"),
+    PRICE_LOW_TO_HIGH("السعر: من الأقل للأعلى"),
+    PRICE_HIGH_TO_LOW("السعر: من الأعلى للأقل")
+}
 
 data class AdminFinancialSummary(
     val pendingCount: Int,

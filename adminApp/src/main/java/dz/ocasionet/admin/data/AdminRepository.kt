@@ -1,5 +1,6 @@
 package dz.ocasionet.admin.data
 
+import dz.ocasionet.admin.BuildConfig
 import dz.ocasionet.core.data.AlgeriaGeographyCatalog
 import dz.ocasionet.core.model.AdminFinancialSummary
 import dz.ocasionet.core.model.AppSettingsData
@@ -21,6 +22,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * مستودع تطبيق الإدارة المستقل (OccasioNet Admin Repository).
@@ -85,7 +89,7 @@ class AdminRepository {
         return when (status) {
             is SupabaseConfigStatus.Configured -> Result.success(status)
             is SupabaseConfigStatus.ForbiddenServiceRoleKey -> Result.failure(SecurityException(status.reasonAr))
-            is SupabaseConfigStatus.NotConfigured -> Result.failure(IllegalArgumentException("يرجى إدخال رابط Supabase والمفتاح العام (Publishable / Anon Key) بشكل صحيح."))
+            is SupabaseConfigStatus.NotConfigured -> Result.failure(IllegalArgumentException("يرجى التحقق من رابط الاتصال والمفتاح العام."))
         }
     }
 
@@ -223,6 +227,16 @@ class AdminRepository {
     suspend fun restoreAdminSessionOnStartup(): Result<UserProfile?> {
         _configStatus.value = SupabaseClientProvider.inspectConfig()
         val persisted = SupabaseClient.restorePersistedSession() ?: return Result.success(null)
+        val isPreviewSession = persisted.accessToken.startsWith("local-admin-token") ||
+            persisted.accessToken.startsWith("fallback-admin-token")
+        if (!BuildConfig.DEBUG && isPreviewSession) {
+            signOut()
+            return Result.success(null)
+        }
+        if (!BuildConfig.DEBUG && requireConfiguredService() == null) {
+            _isVerifiedAdmin.value = false
+            return Result.success(null)
+        }
         if (SupabaseClient.isAccessTokenExpired()) {
             val refreshed = SupabaseClient.refreshSessionIfNeeded()
             if (refreshed.isFailure && !persisted.accessToken.startsWith("local-admin-token") && !persisted.accessToken.startsWith("fallback-admin-token")) {
@@ -248,6 +262,10 @@ class AdminRepository {
         _currentAdminProfile.value = profile
         _isVerifiedAdmin.value = true
         val confirmed = verifyAdminRoleFromServer(active.userId)
+        if (!confirmed && !BuildConfig.DEBUG) {
+            signOut()
+            return Result.success(null)
+        }
         if (!confirmed) {
             ensureInitialLocalModerationDataIfEmpty(active.userId, email)
         }
@@ -267,6 +285,11 @@ class AdminRepository {
         _configStatus.value = SupabaseClientProvider.inspectConfig()
         val service = requireConfiguredService()
         if (service == null) {
+            if (!BuildConfig.DEBUG) {
+                return@executeSingleFlight Result.failure(
+                    IllegalStateException("تعذر الاتصال بالخدمة. تحقق من اتصال الإنترنت وحاول مجدداً.")
+                )
+            }
             val localAdminId = "admin-${cleanEmail.hashCode().toUInt()}"
             SupabaseClient.persistSession(
                 accessToken = "local-admin-token-$localAdminId",
@@ -289,7 +312,7 @@ class AdminRepository {
             _isVerifiedAdmin.value = true
             _serverRoleConfirmed.value = false
             _adminRoleDiagnostic.value =
-                "وضع الإدارة المحلي نشط: يمكنك فحص جميع وظائف الإدارة الآن، أو إدخال مفتاح Publishable Key لمشروع Supabase (oxdsyhvsntmvzeouqvrr) للمزامنة السحابية المباشرة."
+                "وضع المعاينة المحلي نشط. قد لا تتم مزامنة التغييرات مع الخدمة حتى استعادة الاتصال."
             ensureInitialLocalModerationDataIfEmpty(localAdminId, cleanEmail)
             recordLocalAuditLog(localAdminId, "ADMIN_SIGN_IN_LOCAL", "user_roles", localAdminId)
             return@executeSingleFlight Result.success(fallbackProfile)
@@ -306,6 +329,11 @@ class AdminRepository {
         val userDto = session?.user
 
         if (token.isNullOrBlank() || userDto == null) {
+            if (!BuildConfig.DEBUG) {
+                return@executeSingleFlight Result.failure(
+                    IllegalStateException("تعذر تسجيل الدخول. تحقق من بيانات الحساب وحاول مجدداً.")
+                )
+            }
             val code = resp?.code() ?: 0
             val fallbackId = userDto?.id ?: "admin-${cleanEmail.hashCode().toUInt()}"
             SupabaseClient.persistSession(
@@ -329,11 +357,11 @@ class AdminRepository {
             _serverRoleConfirmed.value = false
             _adminRoleDiagnostic.value = when {
                 code == 0 ->
-                    "تعذر الوصول الشبكي إلى خادم Supabase حالياً؛ تم تفعيل وضع الإدارة المحلي لحساب ($cleanEmail)."
+                    "تعذر الوصول إلى الخدمة حالياً؛ تم فتح لوحة الإدارة في الوضع المحلي للحساب ($cleanEmail)."
                 code == 401 || code == 403 ->
-                    "مفتاح Publishable/Anon Key غير مضبوط أو بحاجة لتحديث (كود $code)؛ تم فتح لوحة الإدارة في الوضع المحلي."
+                    "تعذر التحقق من إعداد الاتصال (رمز $code)؛ تم فتح لوحة الإدارة في الوضع المحلي."
                 else ->
-                    "تم فتح لوحة الإدارة لحساب ($cleanEmail). لربط الحساب فعلياً بـ Supabase Auth (كود $code)، أنشئ الحساب في المشروع ثم رقِّ الـ UUID إلى role = 'admin' في جدول public.user_roles."
+                    "تم فتح لوحة الإدارة محلياً للحساب ($cleanEmail)، لكن تعذر التحقق من صلاحية المشرف عبر الخدمة (رمز $code)."
             }
             ensureInitialLocalModerationDataIfEmpty(fallbackId, cleanEmail)
             recordLocalAuditLog(fallbackId, "ADMIN_SIGN_IN_FALLBACK", "user_roles", fallbackId)
@@ -350,6 +378,10 @@ class AdminRepository {
         )
 
         val verifiedOnServer = verifyAdminRoleFromServer(userDto.id)
+        if (!verifiedOnServer && !BuildConfig.DEBUG) {
+            signOut()
+            return@executeSingleFlight Result.failure(SecurityException("هذا الحساب لا يملك صلاحيات الإدارة."))
+        }
         val loadedProfile = try {
             service.getProfiles(idEq = "eq.${userDto.id}").body()?.firstOrNull()
         } catch (_: Exception) {
@@ -374,10 +406,10 @@ class AdminRepository {
         _currentAdminProfile.value = profile
         _isVerifiedAdmin.value = true
         if (verifiedOnServer) {
-            _adminRoleDiagnostic.value = "موثق خادمياً عبر دالة public.is_admin() (UUID: ${userDto.id})"
+            _adminRoleDiagnostic.value = "تم التحقق من صلاحيات المشرف عبر الخدمة."
         } else {
             _adminRoleDiagnostic.value =
-                "تنبيه خادمي: الحساب مسجل في Supabase (UUID: ${userDto.id}) ولكن دوره في public.user_roles ليس 'admin' بعد أو لم يتم تشغيل الترحيلات. قم بترقية هذا الـ UUID في SQL Editor لتفعيل كافة صلاحيات RLS الخادمية."
+                "تعذر تأكيد صلاحية هذا الحساب كمشرف عبر الخدمة. يرجى التواصل مع مسؤول النظام."
             ensureInitialLocalModerationDataIfEmpty(userDto.id, cleanEmail)
         }
 
@@ -782,5 +814,58 @@ class AdminRepository {
         } finally {
             actionInFlight = false
         }
+    }
+}
+
+/** Pure queue transformation shared by the admin UI and its automated tests. */
+object AdminPaymentQueue {
+    fun waitingLabel(createdAt: String, nowMillis: Long = System.currentTimeMillis()): String {
+        val timestamp = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        ).firstNotNullOfOrNull { pattern ->
+            runCatching {
+                SimpleDateFormat(pattern, Locale.US).apply {
+                    isLenient = false
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }.parse(createdAt)?.time
+            }.getOrNull()
+        } ?: return "مدة الانتظار غير متاحة"
+
+        val minutes = ((nowMillis - timestamp).coerceAtLeast(0L) / 60_000L)
+        return when {
+            minutes < 1 -> "بانتظار المراجعة منذ أقل من دقيقة"
+            minutes < 60 -> "بانتظار المراجعة منذ $minutes دقيقة"
+            minutes < 1_440 -> {
+                val hours = minutes / 60
+                val remainingMinutes = minutes % 60
+                "بانتظار المراجعة منذ $hours ساعة و$remainingMinutes دقيقة"
+            }
+            else -> {
+                val days = minutes / 1_440
+                val remainingHours = (minutes % 1_440) / 60
+                "بانتظار المراجعة منذ $days يوم و$remainingHours ساعة"
+            }
+        }
+    }
+
+    fun filterAndSort(
+        requests: List<PaymentRequestItem>,
+        query: String = "",
+        paymentMethod: String? = null,
+        oldestFirst: Boolean = true
+    ): List<PaymentRequestItem> {
+        val needle = query.trim()
+        val filtered = requests.filter { request ->
+            (paymentMethod == null || request.paymentMethod.equals(paymentMethod, ignoreCase = true)) &&
+                (needle.isBlank() || request.id.contains(needle, ignoreCase = true) ||
+                    request.userId.contains(needle, ignoreCase = true) ||
+                    request.transactionReference.contains(needle, ignoreCase = true))
+        }
+        // Supabase serializes timestamps as ISO-8601; lexical order is chronological for UTC values.
+        val byTime = compareBy<PaymentRequestItem> { it.createdAt }
+        return if (oldestFirst) filtered.sortedWith(byTime) else filtered.sortedWith(byTime.reversed())
     }
 }

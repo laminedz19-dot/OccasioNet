@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dz.ocasionet.core.model.ListingCondition
 import dz.ocasionet.core.model.ListingFilter
 import dz.ocasionet.core.model.ListingItem
+import dz.ocasionet.core.model.ListingSortOrder
 import dz.ocasionet.core.model.PaymentMethodType
 import dz.ocasionet.core.model.PaymentRequestItem
 import dz.ocasionet.core.network.AuthCallbackResult
@@ -144,7 +145,7 @@ class UserViewModel(
                     navigateTo(UserScreenRoute.RESET_PASSWORD)
                 }
                 is AuthCallbackResult.Error -> {
-                    _feedbackBanner.value = res.messageAr
+                    _feedbackBanner.value = "تعذر التحقق من الرابط. تأكد من صلاحيته واتصال الإنترنت ثم حاول مجدداً."
                 }
                 AuthCallbackResult.Ignored -> {}
             }
@@ -199,7 +200,8 @@ class UserViewModel(
         communeId: Int? = _filter.value.communeId,
         condition: ListingCondition? = _filter.value.condition,
         minPriceDzd: Long? = _filter.value.minPriceDzd,
-        maxPriceDzd: Long? = _filter.value.maxPriceDzd
+        maxPriceDzd: Long? = _filter.value.maxPriceDzd,
+        sortOrder: ListingSortOrder = _filter.value.sortOrder
     ) {
         val validCommune = if (wilayaCode != _filter.value.wilayaCode) null else communeId
         _filter.value = ListingFilter(
@@ -209,7 +211,8 @@ class UserViewModel(
             communeId = validCommune,
             condition = condition,
             minPriceDzd = minPriceDzd,
-            maxPriceDzd = maxPriceDzd
+            maxPriceDzd = maxPriceDzd,
+            sortOrder = sortOrder
         )
         viewModelScope.launch {
             repository.updateFilterPreferences(
@@ -239,9 +242,9 @@ class UserViewModel(
         viewModelScope.launch {
             repository.updateDarkModePreference(enabled)
             _feedbackBanner.value = if (enabled) {
-                "تم تفعيل الوضع الليلي الملكي وحفظه في DataStore."
+                "تم تفعيل الوضع الليلي الملكي وحفظ اختيارك."
             } else {
-                "تم تفعيل الوضع النهاري وحفظه في DataStore."
+                "تم تفعيل الوضع النهاري وحفظ اختيارك."
             }
         }
     }
@@ -261,7 +264,7 @@ class UserViewModel(
         viewModelScope.launch {
             repository.updateAcceptedTermsAndPrivacy(accepted)
             _feedbackBanner.value = if (accepted) {
-                "تم تسجيل موافقتك على شروط الاستخدام وسياسة الخصوصية في DataStore."
+                "تم تسجيل موافقتك على شروط الاستخدام وسياسة الخصوصية."
             } else {
                 "تم إلغاء حالة الموافقة المحفوظة محلياً."
             }
@@ -292,8 +295,8 @@ class UserViewModel(
             res.onSuccess { msg ->
                 _feedbackBanner.value = msg
                 navigateTo(UserScreenRoute.HOME)
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "فشل إنشاء الحساب."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر إنشاء الحساب. تحقق من البيانات واتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -307,8 +310,8 @@ class UserViewModel(
             res.onSuccess {
                 _feedbackBanner.value = "مرحباً بك، تم تسجيل الدخول بنجاح."
                 navigateTo(UserScreenRoute.HOME)
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "فشل تسجيل الدخول."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر تسجيل الدخول. تحقق من البريد وكلمة المرور ثم حاول مجدداً."
             }
         }
     }
@@ -319,7 +322,7 @@ class UserViewModel(
             _isBusy.value = true
             val res = repository.resendEmailConfirmation(email)
             _isBusy.value = false
-            _feedbackBanner.value = res.getOrElse { it.message ?: "تعذر إعادة الإرسال." }
+            _feedbackBanner.value = res.getOrElse { "تعذر إرسال رسالة التأكيد. تحقق من البريد والاتصال ثم حاول مجدداً." }
         }
     }
 
@@ -329,7 +332,7 @@ class UserViewModel(
             _isBusy.value = true
             val res = repository.requestPasswordRecovery(email)
             _isBusy.value = false
-            _feedbackBanner.value = res.getOrElse { it.message ?: "تعذر إرسال رابط الاستعادة." }
+            _feedbackBanner.value = res.getOrElse { "تعذر إرسال رابط الاستعادة. تحقق من البريد الإلكتروني ثم حاول مجدداً." }
         }
     }
 
@@ -339,7 +342,7 @@ class UserViewModel(
             _isBusy.value = true
             val res = repository.resetPassword(newPassword)
             _isBusy.value = false
-            _feedbackBanner.value = res.getOrElse { it.message ?: "تعذر تعيين كلمة المرور." }
+            _feedbackBanner.value = res.getOrElse { "تعذر تحديث كلمة المرور. تحقق من الرابط وصلاحيته ثم حاول مجدداً." }
         }
     }
 
@@ -352,8 +355,8 @@ class UserViewModel(
             res.onSuccess {
                 _feedbackBanner.value = "تم حفظ تعديلات الملف الشخصي بنجاح."
                 navigateTo(UserScreenRoute.PROFILE)
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "تعذر حفظ البيانات."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر حفظ الملف الشخصي. تحقق من اتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -380,8 +383,8 @@ class UserViewModel(
             res.onSuccess {
                 _feedbackBanner.value = "تم رفع إثبات الدفع بنجاح وتسجيل الطلب بحالة (قيد المراجعة - pending)."
                 navigateTo(UserScreenRoute.PAYMENT_HISTORY)
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "فشل رفع إثبات الدفع."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر رفع الإيصال. تحقق من نوع الملف وحجمه واتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -398,10 +401,10 @@ class UserViewModel(
             val res = repository.uploadListingImage(fileName, mimeType, fileBytes)
             _isBusy.value = false
             res.onSuccess { url ->
-                _feedbackBanner.value = "تم رفع صورة الإعلان إلى حاوية listing-images بنجاح."
+                _feedbackBanner.value = "تم رفع صورة الإعلان بنجاح."
                 onUploaded(url)
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "تعذر رفع صورة الإعلان."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر رفع الصورة. تحقق من نوعها وحجمها واتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -415,8 +418,8 @@ class UserViewModel(
             res.onSuccess {
                 _feedbackBanner.value = "تم حذف صورة الإعلان من مجلدك الشخصي."
                 onDeleted()
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "تعذر حذف صورة الإعلان."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر حذف الصورة الآن. تحقق من الاتصال ثم حاول مجدداً."
             }
         }
     }
@@ -478,8 +481,8 @@ class UserViewModel(
                 _pendingListingDraft.value = null
                 _feedbackBanner.value = "تم نشر الإعلان بنجاح واستهلاك الدفعة المعتمدة ذرياً."
                 navigateTo(UserScreenRoute.MY_LISTINGS)
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "تعذر نشر الإعلان."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر نشر الإعلان. تحقق من بياناته والدفعة المعتمدة ثم حاول مجدداً."
             }
         }
     }
@@ -493,8 +496,8 @@ class UserViewModel(
             res.onSuccess {
                 _feedbackBanner.value = "تم تحديث الإعلان وحالته بنجاح."
                 navigateTo(UserScreenRoute.MY_LISTINGS)
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "تعذر تحديث الإعلان."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر تحديث الإعلان. تحقق من البيانات واتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -502,8 +505,8 @@ class UserViewModel(
     fun toggleFavorite(listingId: String) {
         viewModelScope.launch {
             val res = repository.toggleFavorite(listingId)
-            res.onFailure { err ->
-                _feedbackBanner.value = err.message
+            res.onFailure {
+                _feedbackBanner.value = "تعذر تحديث المفضلة الآن. تحقق من الاتصال ثم حاول مجدداً."
             }
         }
     }
@@ -517,8 +520,8 @@ class UserViewModel(
             res.onSuccess {
                 _feedbackBanner.value = "تم إرسال بلاغك إلى الإدارة للمراجعة."
                 navigateBack()
-            }.onFailure { err ->
-                _feedbackBanner.value = err.message ?: "تعذر إرسال البلاغ."
+            }.onFailure {
+                _feedbackBanner.value = "تعذر إرسال البلاغ الآن. تحقق من الاتصال ثم حاول مجدداً."
             }
         }
     }

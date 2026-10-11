@@ -7,6 +7,7 @@ import dz.ocasionet.core.model.Commune
 import dz.ocasionet.core.model.FavoriteRecord
 import dz.ocasionet.core.model.ListingFilter
 import dz.ocasionet.core.model.ListingItem
+import dz.ocasionet.core.model.ListingSortOrder
 import dz.ocasionet.core.model.NotificationItem
 import dz.ocasionet.core.model.PaymentRequestItem
 import dz.ocasionet.core.model.ResourceState
@@ -164,8 +165,10 @@ class OccasioNetRepository(
         val service = requireConfiguredService()
         if (service == null) {
             if (_configStatus.value is SupabaseConfigStatus.ForbiddenServiceRoleKey) {
-                val st = _configStatus.value as SupabaseConfigStatus.ForbiddenServiceRoleKey
-                _publicListingsState.value = ResourceState.Error(st.reasonAr, isNetworkError = false)
+                _publicListingsState.value = ResourceState.Error(
+                    "تعذر تهيئة الاتصال الآمن. يرجى التواصل مع مسؤول التطبيق.",
+                    isNetworkError = false
+                )
             } else {
                 _publicListingsState.value = ResourceState.Success(emptyList())
             }
@@ -199,12 +202,12 @@ class OccasioNetRepository(
                 isNetworkError = true
             )
         } catch (e: Exception) {
-            _publicListingsState.value = ResourceState.Error("حدث خطأ غير متوقع: ${e.localizedMessage}")
+            _publicListingsState.value = ResourceState.Error("حدث خطأ غير متوقع أثناء تحميل الإعلانات. يرجى المحاولة لاحقاً.")
         }
     }
 
     fun filterListings(items: List<ListingItem>, filter: ListingFilter): List<ListingItem> {
-        return items.filter { item ->
+        val matching = items.filter { item ->
             val matchesQuery = filter.query.isBlank() ||
                 item.title.contains(filter.query.trim(), ignoreCase = true) ||
                 item.description.contains(filter.query.trim(), ignoreCase = true)
@@ -217,6 +220,15 @@ class OccasioNetRepository(
 
             matchesQuery && matchesCategory && matchesWilaya && matchesCommune &&
                 matchesCondition && matchesMinPrice && matchesMaxPrice
+        }
+        return when (filter.sortOrder) {
+            ListingSortOrder.NEWEST -> matching.sortedByDescending { it.createdAt }
+            ListingSortOrder.PRICE_LOW_TO_HIGH -> matching.sortedWith(
+                compareBy<ListingItem> { it.priceDzd }.thenByDescending { it.createdAt }
+            )
+            ListingSortOrder.PRICE_HIGH_TO_LOW -> matching.sortedWith(
+                compareByDescending<ListingItem> { it.priceDzd }.thenByDescending { it.createdAt }
+            )
         }
     }
 
@@ -475,7 +487,7 @@ class OccasioNetRepository(
 
     suspend fun resendEmailConfirmation(email: String): Result<String> = executeSingleFlight {
         val service = requireConfiguredService()
-            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد الاتصال بالخدمة بعد."))
         val resp = service.resendConfirmationEmail(AuthEmailRequest(email = email.trim(), type = "signup"))
         if (resp.isSuccessful) {
             Result.success("تم إرسال رسالة تأكيد البريد الإلكتروني بنجاح.")
@@ -486,7 +498,7 @@ class OccasioNetRepository(
 
     suspend fun requestPasswordRecovery(email: String): Result<String> = executeSingleFlight {
         val service = requireConfiguredService()
-            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد الاتصال بالخدمة بعد."))
         val resp = service.recoverPassword(AuthEmailRequest(email = email.trim()))
         if (resp.isSuccessful) {
             Result.success("تم إرسال تعليمات استعادة كلمة المرور إلى بريدك الإلكتروني.")
@@ -500,7 +512,7 @@ class OccasioNetRepository(
             return@executeSingleFlight Result.failure(IllegalArgumentException("كلمة المرور يجب أن لا تقل عن 8 أحرف."))
         }
         val service = requireConfiguredService()
-            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد الاتصال بالخدمة بعد."))
         val resp = service.updatePassword(AuthPasswordUpdateRequest(newPassword))
         if (resp.isSuccessful) {
             Result.success("تم تحديث كلمة المرور بنجاح.")
@@ -514,7 +526,7 @@ class OccasioNetRepository(
             val user = _currentUser.value
                 ?: return@executeSingleFlight Result.failure(IllegalStateException("يجب تسجيل الدخول أولاً."))
             val service = requireConfiguredService()
-                ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+                ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد الاتصال بالخدمة بعد."))
 
             val updates = mutableMapOf<String, Any>(
                 "full_name" to fullName.trim(),
@@ -769,7 +781,7 @@ class OccasioNetRepository(
         status: String
     ): Result<ListingItem> = executeSingleFlight {
         val service = requireConfiguredService()
-            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد الاتصال بالخدمة بعد."))
         val resp = service.updateOwnListing(
             idEq = "eq.$listingId",
             updates = mapOf(
@@ -793,7 +805,7 @@ class OccasioNetRepository(
         val user = _currentUser.value
             ?: return@executeSingleFlight Result.failure(IllegalStateException("يرجى تسجيل الدخول لإضافة الإعلان للمفضلة."))
         val service = requireConfiguredService()
-            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد الاتصال بالخدمة بعد."))
 
         val isFav = listingId in _favoriteListingIds.value
         val resp = if (isFav) {
@@ -813,7 +825,7 @@ class OccasioNetRepository(
         val user = _currentUser.value
             ?: return@executeSingleFlight Result.failure(IllegalStateException("يجب تسجيل الدخول للإبلاغ عن إعلان."))
         val service = requireConfiguredService()
-            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد اتصال Supabase بعد."))
+            ?: return@executeSingleFlight Result.failure(IllegalStateException("لم يتم إعداد الاتصال بالخدمة بعد."))
 
         val resp = service.submitReport(
             mapOf(

@@ -48,6 +48,7 @@ import dz.ocasionet.core.model.ListingCondition
 import dz.ocasionet.core.model.ListingStatus
 import dz.ocasionet.core.model.PaymentMethodType
 import dz.ocasionet.core.model.PaymentStatus
+import dz.ocasionet.core.model.ResourceState
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -267,7 +268,7 @@ fun UserCreateListingScreen(viewModel: UserViewModel) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "صور الإعلان (${imageUrls.size}/${settings.maxImagesPerListing}) — حاوية listing-images",
+                        text = "صور الإعلان (${imageUrls.size}/${settings.maxImagesPerListing})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -660,7 +661,7 @@ fun UserUploadReceiptScreen(viewModel: UserViewModel) {
         item {
             Text("رفع إثبات الدفع (${settings.listingFeeDzd} دج)", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "يتم حفظ الإيصال في حاوية خاصة (payment-receipts) غير متاحة للعامة، ويُسجل الطلب بحالة (قيد المراجعة - pending) حتى يراجعه المشرف.",
+                "يُحفظ الإيصال بشكل خاص، ويُسجل الطلب بحالة (قيد المراجعة) حتى يراجعه المشرف.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -945,7 +946,7 @@ fun UserSettingsScreen(viewModel: UserViewModel) {
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "التفضيلات المحلية المحفوظة (Jetpack DataStore)",
+                        "تفضيلات التطبيق المحفوظة",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -957,7 +958,7 @@ fun UserSettingsScreen(viewModel: UserViewModel) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("الوضع الليلي الملكي (Dark Mode)", fontWeight = FontWeight.Bold)
                             Text(
-                                "التبديل الفوري وحفظ المظهر في DataStore",
+                                "التبديل الفوري وحفظ اختيارك",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1019,7 +1020,7 @@ fun UserSettingsScreen(viewModel: UserViewModel) {
                     )
                     Text(
                         "• حالة الموافقة على الشروط والخصوصية: ${
-                            if (localPrefs.acceptedTermsAndPrivacy) "تمت الموافقة وموثقة في DataStore" else "بانتظار التأكيد"
+                            if (localPrefs.acceptedTermsAndPrivacy) "تمت الموافقة" else "بانتظار التأكيد"
                         }"
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1069,7 +1070,7 @@ fun UserSettingsScreen(viewModel: UserViewModel) {
                 onClick = { viewModel.navigateTo(UserScreenRoute.SYSTEM_STATES) },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("فحص حالات التحميل، الشبكة، وأمان RLS")
+                Text("حالة الاتصال والخصوصية")
             }
         }
     }
@@ -1097,8 +1098,8 @@ fun UserTermsAndPrivacyScreen(viewModel: UserViewModel) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("1. البيانات التي يجمعها التطبيق", fontWeight = FontWeight.Bold)
                     Text("• بيانات الحساب: الاسم الكامل، البريد الإلكتروني، رقم الهاتف الجزائري، والولاية/البلدية.")
-                    Text("• بيانات الإعلانات: العنوان، الوصف، السعر بالدينار الجزائري، والصور المرفوعة في حاوية listing-images العامة.")
-                    Text("• رموز الجلسة: تُخزّن مشفرة محلياً بواسطة Android Keystore (AES/GCM) داخل DataStore ولا تُكتب في سجلات النظام.")
+                    Text("• بيانات الإعلانات: العنوان، الوصف، السعر بالدينار الجزائري، والصور المرفقة بالإعلان.")
+                    Text("• تُحفظ بيانات الدخول بشكل مشفر على الجهاز ولا تُكتب في سجلات النظام.")
                 }
             }
         }
@@ -1107,7 +1108,7 @@ fun UserTermsAndPrivacyScreen(viewModel: UserViewModel) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("2. رسوم النشر وإيصالات الدفع والاحتفاظ بها", fontWeight = FontWeight.Bold)
                     Text("• رسوم نشر الإعلان الواحد هي ${settings.listingFeeDzd} دج وتُدفع عبر التحويل البريدي (CCP) أو تطبيق بريدي موب (BaridiMob).")
-                    Text("• تُحفظ إيصالات الدفع في حاوية خاصة (payment-receipts) محمية بسياسات RLS، ولا يطلع عليها سوى صاحب الطلب والمشرف المختص عبر رابط مؤقت قصير الصلاحية (120 ثانية).")
+                    Text("• تُحفظ إيصالات الدفع بشكل خاص، ولا يطّلع عليها إلا صاحب الطلب والمشرف المخوّل.")
                     Text("• كل إيصال معتمد يُستهلك ذرياً لنشر إعلان واحد فقط، ويُحظر تعديل الإيصال أو إعادة استخدامه.")
                     Text("• سياسة الاحتفاظ المقترحة (تُعتمد من المالك): يُحتفظ بسجل المراجعة لأغراض التدقيق المالي ومنع التكرار، بينما تُحذف الإيصالات اليتيمة غير المرتبطة بطلب دفع تلقائياً.")
                 }
@@ -1133,7 +1134,7 @@ fun UserTermsAndPrivacyScreen(viewModel: UserViewModel) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (localPrefs.acceptedTermsAndPrivacy) {
-                                "تم تأكيد موافقتك على الشروط وسياسة الخصوصية (محفوظ في DataStore)"
+                                "تم تأكيد موافقتك على الشروط وسياسة الخصوصية"
                             } else {
                                 "تأكيد الموافقة على شروط الاستخدام وسياسة الخصوصية"
                             },
@@ -1162,20 +1163,38 @@ fun UserTermsAndPrivacyScreen(viewModel: UserViewModel) {
 
 @Composable
 fun UserSystemStatesScreen(viewModel: UserViewModel) {
-    val configStatus by viewModel.repository.configStatus.collectAsState()
     val listingsState by viewModel.repository.publicListingsState.collectAsState()
     val localPrefs by viewModel.repository.localUserPreferences.collectAsState()
-    val hasActiveToken = !dz.ocasionet.core.network.SupabaseClient.currentAccessToken.isNullOrBlank()
+    val connectionLabel = when (listingsState) {
+        is ResourceState.Loading -> "جارٍ الاتصال…"
+        is ResourceState.Idle -> "بانتظار التحديث"
+        is ResourceState.Success -> "البيانات محدثة"
+        is ResourceState.Error -> "تعذر تحميل البيانات؛ أعد المحاولة"
+    }
 
+    UserSystemStatesContent(
+        connectionLabel = connectionLabel,
+        darkModeEnabled = localPrefs.darkModeEnabled,
+        preferredWilayaCode = localPrefs.preferredWilayaCode,
+        onRefresh = { viewModel.refreshPublicData() }
+    )
+}
+
+@Composable
+fun UserSystemStatesContent(
+    connectionLabel: String,
+    darkModeEnabled: Boolean,
+    preferredWilayaCode: Int?,
+    onRefresh: () -> Unit
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Text("حالات الاتصال والتحقق النهائي (Supabase & DataStore)", style = MaterialTheme.typography.headlineMedium)
-            SupabaseConnectionStatusCard(configStatus = configStatus, onRetry = { viewModel.refreshPublicData() })
-            Text("حالة جلب البيانات الحالية: ${listingsState::class.simpleName}")
+            Text("حالة التطبيق والاتصال", style = MaterialTheme.typography.headlineMedium)
+            Text("حالة البيانات: $connectionLabel")
         }
 
         item {
@@ -1184,27 +1203,18 @@ fun UserSystemStatesScreen(viewModel: UserViewModel) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("قائمة التحقق التشغيلي والأمني النهائي", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("معلومات التطبيق والخصوصية", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     }
-                    Text(
-                        "1. متغيرات اتصال Supabase: ${
-                            when (val st = configStatus) {
-                                is dz.ocasionet.core.model.SupabaseConfigStatus.Configured -> "مهيأة (${st.url}) بمفتاح عام آمن (${st.anonKeyMasked})"
-                                is dz.ocasionet.core.model.SupabaseConfigStatus.NotConfigured -> "بانتظار إدخال SUPABASE_URL و SUPABASE_ANON_KEY في لوحة Secrets"
-                                is dz.ocasionet.core.model.SupabaseConfigStatus.ForbiddenServiceRoleKey -> "مرفوض أمنياً: ${st.reasonAr}"
-                            }
-                        }"
-                    )
-                    Text("2. تخزين الجلسات المشفر (DataStore + AES/GCM): مفعّل (${if (hasActiveToken) "جلسة نشطة ومشفرة" else "لا توجد جلسة نشطة حالياً"})")
-                    Text("3. تفضيلات المستخدم المحلية: الوضع الليلي=${localPrefs.darkModeEnabled} • الولاية=${localPrefs.preferredWilayaCode ?: "الكل"}")
-                    Text("4. التحقق من قاعدة البيانات: سكربت supabase/tests/01_verify_migrations_and_rls.sql جاهز لفحص 12 جدولاً و 7 دوال SECURITY DEFINER")
+                    Text("تُحفظ تفضيلاتك على هذا الجهاز.")
+                    Text("المظهر: ${if (darkModeEnabled) "داكن" else "فاتح"} • الولاية المفضلة: ${preferredWilayaCode ?: "الكل"}")
+                    Text("نحمي بيانات الحساب والإيصالات، ولا نعرضها إلا وفق صلاحيات الوصول.")
                 }
             }
         }
 
         item {
-            Button(onClick = { viewModel.refreshPublicData() }, modifier = Modifier.fillMaxWidth()) {
-                Text("إعادة فحص الاتصال بـ Supabase")
+            Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
+                Text("تحديث حالة الاتصال")
             }
         }
     }
