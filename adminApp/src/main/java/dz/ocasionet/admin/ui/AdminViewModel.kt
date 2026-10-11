@@ -47,6 +47,8 @@ class AdminViewModel(
     private val _isDarkAdminTheme = MutableStateFlow(true)
     val isDarkAdminTheme: StateFlow<Boolean> = _isDarkAdminTheme.asStateFlow()
 
+    private var automaticReceiptRefreshUsedFor: String? = null
+
     init {
         restoreAdminSessionOnStartup()
     }
@@ -82,9 +84,9 @@ class AdminViewModel(
             val res = repository.updateSupabaseConfig(url, anonKey)
             _isBusy.value = false
             res.onSuccess {
-                _feedback.value = "تم حفظ إعدادات اتصال Supabase بنجاح في DataStore المشفر."
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "تعذر حفظ إعدادات الاتصال."
+                _feedback.value = "تم حفظ إعدادات الاتصال بأمان."
+            }.onFailure {
+                _feedback.value = "تعذر حفظ إعدادات الاتصال؛ تحقق من الرابط والمفتاح العام."
             }
         }
     }
@@ -117,8 +119,8 @@ class AdminViewModel(
             res.onSuccess { profile ->
                 _feedback.value = "مرحباً بك في لوحة الإدارة (${profile.email})."
                 _currentRoute.value = AdminScreenRoute.DASHBOARD_STATS
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "فشل تسجيل دخول المشرف."
+            }.onFailure {
+                _feedback.value = "تعذر تسجيل الدخول. تحقق من بيانات الحساب واتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -131,8 +133,8 @@ class AdminViewModel(
             _isBusy.value = false
             res.onSuccess {
                 _feedback.value = "تم تحديث بيانات لوحة الإدارة."
-            }.onFailure { err ->
-                _feedback.value = err.message
+            }.onFailure {
+                _feedback.value = "تعذر تحديث لوحة الإدارة. تحقق من الاتصال ثم حاول مجدداً."
             }
         }
     }
@@ -140,10 +142,33 @@ class AdminViewModel(
     fun inspectPaymentReceipt(item: PaymentRequestItem) {
         _selectedPayment.value = item
         _signedReceiptUrl.value = null
+        automaticReceiptRefreshUsedFor = null
         navigateProtected(AdminScreenRoute.RECEIPT_INSPECTOR)
+        loadReceiptUrl(item.id)
+    }
+
+    /** Renew an expired/unavailable preview link once automatically; manual retry remains unlimited. */
+    fun refreshReceiptPreview(paymentRequestId: String, automatic: Boolean = false): Boolean {
+        if (_selectedPayment.value?.id != paymentRequestId) return false
+        if (automatic) {
+            if (automaticReceiptRefreshUsedFor == paymentRequestId) return false
+            automaticReceiptRefreshUsedFor = paymentRequestId
+        } else {
+            automaticReceiptRefreshUsedFor = null
+        }
+        _signedReceiptUrl.value = null
+        loadReceiptUrl(paymentRequestId)
+        return true
+    }
+
+    private fun loadReceiptUrl(paymentRequestId: String) {
+        val target = _selectedPayment.value?.takeIf { it.id == paymentRequestId } ?: return
         viewModelScope.launch {
-            val signed = repository.adminGeneratePrivateReceiptSignedUrl(item.receiptStoragePath)
-            _signedReceiptUrl.value = signed.getOrNull()
+            val signed = repository.adminGeneratePrivateReceiptSignedUrl(target.receiptStoragePath)
+            if (_selectedPayment.value?.id == paymentRequestId) {
+                signed.onSuccess { _signedReceiptUrl.value = it }
+                    .onFailure { _feedback.value = "تعذر تجهيز الإيصال. أعد المحاولة لاحقاً." }
+            }
         }
     }
 
@@ -155,8 +180,8 @@ class AdminViewModel(
             res.onSuccess {
                 _feedback.value = "تمت الموافقة على طلب الدفع بنجاح وتحديث سجل التدقيق."
                 navigateProtected(AdminScreenRoute.PENDING_PAYMENTS)
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "فشل اعتماد طلب الدفع."
+            }.onFailure {
+                _feedback.value = "تعذر اعتماد الطلب. تحقق من حالته واتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -173,8 +198,8 @@ class AdminViewModel(
             res.onSuccess {
                 _feedback.value = "تم رفض طلب الدفع مع تسجيل سبب الرفض في سجل التدقيق."
                 navigateProtected(AdminScreenRoute.PENDING_PAYMENTS)
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "فشل رفض طلب الدفع."
+            }.onFailure {
+                _feedback.value = "تعذر رفض الطلب. تحقق من سبب الرفض واتصال الإنترنت ثم حاول مجدداً."
             }
         }
     }
@@ -186,8 +211,8 @@ class AdminViewModel(
             _isBusy.value = false
             res.onSuccess {
                 _feedback.value = if (isBanned) "تم حظر المستخدم بنجاح." else "تم إلغاء حظر المستخدم."
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "تعذر تحديث حالة المستخدم."
+            }.onFailure {
+                _feedback.value = "تعذر تحديث حالة المستخدم. تحقق من الاتصال ثم حاول مجدداً."
             }
         }
     }
@@ -199,8 +224,8 @@ class AdminViewModel(
             _isBusy.value = false
             res.onSuccess {
                 _feedback.value = "تم تحديث حالة الإعلان إلى ($newStatus) وتسجيل العملية."
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "تعذر تحديث حالة الإعلان."
+            }.onFailure {
+                _feedback.value = "تعذر تحديث حالة الإعلان. تحقق من الاتصال ثم حاول مجدداً."
             }
         }
     }
@@ -212,8 +237,8 @@ class AdminViewModel(
             _isBusy.value = false
             res.onSuccess {
                 _feedback.value = "تمت إضافة الفئة الجديدة ($nameAr) بنجاح."
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "تعذر إضافة الفئة."
+            }.onFailure {
+                _feedback.value = "تعذر إضافة الفئة. تحقق من المعلومات ثم حاول مجدداً."
             }
         }
     }
@@ -230,8 +255,8 @@ class AdminViewModel(
             _isBusy.value = false
             res.onSuccess {
                 _feedback.value = "تم حفظ إعدادات التطبيق وسعر النشر ($feeDzd دج) بنجاح."
-            }.onFailure { err ->
-                _feedback.value = err.message ?: "تعذر حفظ الإعدادات."
+            }.onFailure {
+                _feedback.value = "تعذر حفظ الإعدادات. تحقق من القيم المدخلة والاتصال ثم حاول مجدداً."
             }
         }
     }

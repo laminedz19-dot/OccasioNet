@@ -89,6 +89,7 @@ import dz.ocasionet.core.R
 import dz.ocasionet.core.data.AlgeriaGeographyCatalog
 import dz.ocasionet.core.model.ListingCondition
 import dz.ocasionet.core.model.ListingItem
+import dz.ocasionet.core.model.ListingSortOrder
 import dz.ocasionet.core.model.ResourceState
 import dz.ocasionet.core.model.SupabaseConfigStatus
 import dz.ocasionet.core.ui.theme.OccasioNetTheme
@@ -545,7 +546,6 @@ fun UserWelcomeAuthScreen(viewModel: UserViewModel) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun UserHomeAndVisitorScreen(viewModel: UserViewModel) {
-    val configStatus by viewModel.repository.configStatus.collectAsState()
     val listingsState by viewModel.repository.publicListingsState.collectAsState()
     val categories by viewModel.repository.categories.collectAsState()
     val settings by viewModel.repository.appSettings.collectAsState()
@@ -671,7 +671,11 @@ fun UserHomeAndVisitorScreen(viewModel: UserViewModel) {
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = st.messageAr,
+                                text = when {
+                                    st.isSessionExpired -> "انتهت صلاحية جلسة الدخول. سجّل الدخول مجدداً."
+                                    st.isNetworkError -> "تعذر الاتصال بالإنترنت. تحقق من الاتصال ثم أعد المحاولة."
+                                    else -> "تعذر تحميل الإعلانات حالياً. يرجى المحاولة لاحقاً."
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onErrorContainer
                             )
@@ -879,6 +883,20 @@ fun UserSearchAndFilterScreen(viewModel: UserViewModel) {
                     label = { Text("السعر الأقصى (دج)") },
                     modifier = Modifier.weight(1f)
                 )
+            }
+        }
+
+        item {
+            Text("ترتيب النتائج", style = MaterialTheme.typography.titleMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ListingSortOrder.entries.forEach { order ->
+                    FilterChip(
+                        selected = filter.sortOrder == order,
+                        onClick = { viewModel.updateFilter(sortOrder = order) },
+                        label = { Text(order.labelAr) },
+                        modifier = Modifier.testTag("listing_sort_${order.name.lowercase()}")
+                    )
+                }
             }
         }
 
@@ -1184,7 +1202,7 @@ fun UserEmailConfirmationScreen(viewModel: UserViewModel) {
         Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp))
         Text("تأكيد البريد الإلكتروني وإعادة الإرسال", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "يرجى فتح الرابط المرسل إلى بريدك الإلكتروني لتأكيد حسابك في Supabase Auth. إذا لم تصلك الرسالة، يمكنك إعادة إرسالها من هنا:",
+            "يرجى فتح الرابط المرسل إلى بريدك الإلكتروني لتأكيد حسابك. إذا لم تصلك الرسالة، يمكنك إعادة إرسالها من هنا:",
             style = MaterialTheme.typography.bodyLarge
         )
         OutlinedTextField(
@@ -1219,7 +1237,7 @@ fun UserForgotPasswordScreen(viewModel: UserViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("استعادة كلمة المرور", style = MaterialTheme.typography.headlineMedium)
-        Text("أدخل بريدك الإلكتروني المسجل لإرسال رابط استعادة كلمة المرور عبر Supabase Auth.")
+        Text("أدخل بريدك الإلكتروني المسجل لإرسال رابط استعادة كلمة المرور.")
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },

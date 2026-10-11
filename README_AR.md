@@ -15,7 +15,8 @@
 - `app/`: مضيف المعاينة المباشرة في بيئة المحاكي السحابي.
 - `supabase/migrations/`: ملفات ترحيل قاعدة البيانات (`001_schema.sql`, `002_functions.sql`, `003_rls_and_storage.sql`, `004_seed_reference_data.sql`).
 - `supabase/functions/verify-admin-action/`: دالة خادمية (Edge Function) للتحقق الإداري وتوليد الروابط الموقعة قصيرة الصلاحية.
-- `.github/workflows/android-build.yml`: بناء آلي للتطبيقين ورفع ملفي APK كـ Artifacts.
+- `.github/workflows/android-build.yml`: بناء واختبار آلي للتطبيقين، مع اختبارات واجهة على محاكي Android ورفع ملفي APK كـ Artifacts.
+- `docs/RELEASE_PRIVACY_REVIEW.md`: قائمة مراجعة مالك المشروع لسياسة الخصوصية والاحتفاظ قبل الإصدار العام.
 
 ---
 
@@ -87,9 +88,9 @@ UPDATE public.user_roles SET role = 'user' WHERE user_id = 'UUID_OF_ADMIN';
 - لتشغيل تطبيق الإدارة: اختر Configuration `adminApp` في Android Studio.
 
 ### 14. تشغيل الاختبارات
-لتشغيل حزمة الاختبارات الأمنية والوظيفية (15 سيناريو):
+لتشغيل حزمة الاختبارات الأمنية والوظيفية واختبارات البحث وطابور المراجعة وعمر الانتظار (29 سيناريو موثقاً):
 ```bash
-gradle :core:testDebugUnitTest :app:testDebugUnitTest
+gradle :core:testDebugUnitTest :app:testDebugUnitTest :adminApp:testDebugUnitTest
 ```
 
 ### 15. بناء APK للمستخدم و APK للإدارة

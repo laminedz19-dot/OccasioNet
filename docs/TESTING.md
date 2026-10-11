@@ -32,3 +32,16 @@ gradle :core:testDebugUnitTest
 ## 2. سكربتات التحقق الخادمي في PostgreSQL / Supabase
 - `supabase/tests/01_verify_migrations_and_rls.sql`: فحص غير مدمّر (Read-Only) للتأكد من وجود الجداول الـ 12، تفعيل RLS، وجود الدوال الـ 7، وحاويات التخزين.
 - `supabase/tests/02_provision_test_admin.sql`: إجراء آمن ومعلّم بالمعاملات لترقية مشرف اختباري على بيئة الاختبار فقط.
+
+## 3. تغطية التحسينات الأخيرة
+- `core/src/test/java/dz/ocasionet/core/ListingSearchIntegrationTest.kt`: البحث بالعنوان، دمج البحث مع الولاية ونطاق السعر، وترتيب النتائج بحسب الأحدث والسعر.
+- `adminApp/src/test/java/dz/ocasionet/admin/AdminPaymentQueueIntegrationTest.kt`: أولوية الطلب الأقدم، البحث بمرجع التحويل، التصفية بوسيلة الدفع، الترتيب الأحدث أولاً، وحساب مدة الانتظار مع معالجة التاريخ غير الصالح.
+- شغّلها مع الاختبارات الحالية عبر: `gradle :core:testDebugUnitTest :adminApp:testDebugUnitTest`.
+- هذه اختبارات تكامل على مستوى منطق التطبيق، وليست اتصالاً ببيئة Supabase حية؛ فحوص قاعدة البيانات الحية منفصلة في `supabase/tests/`.
+- تحقق يدويًا على محاكي Android من إيصال صورة وPDF متعدد الصفحات، وانتهاء الرابط أثناء المعاينة (تجديد تلقائي مرة واحدة ثم إعادة محاولة يدوية)، وملف تالف أو أكبر من 5MB؛ يجب أن تُعرض حتى 8 صفحات PDF فقط، ويُحذف الملف المؤقت بعد المعاينة.
+
+## 4. اختبارات الواجهة على محاكي Android
+- `app/src/androidTest/java/dz/ocasionet/user/UserSystemStatusUiTest.kt`: يتحقق من النصوص المبسطة في شاشة حالة المستخدم ومن عمل زر التحديث.
+- `adminApp/src/androidTest/java/dz/ocasionet/admin/AdminLoginUiTest.kt`: يتحقق من صياغة شاشة دخول الإدارة وظهور خيار المعاينة الموسوم للتطوير وعدم كشف أسماء الخدمات في النصوص؛ يُحصر العرض فعلياً في Debug عبر `BuildConfig.DEBUG`.
+- يشغّل GitHub Actions الاختبارين على محاكي Android عبر `gradle :app:connectedDebugAndroidTest :adminApp:connectedDebugAndroidTest`.
+- تتطلب إعادة التشغيل محلياً Android SDK وصورة محاكي متوافقة مع API 35.

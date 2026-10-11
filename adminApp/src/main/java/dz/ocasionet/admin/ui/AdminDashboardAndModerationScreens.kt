@@ -44,6 +44,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,6 +60,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,13 +68,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
+import dz.ocasionet.admin.BuildConfig
 import dz.ocasionet.core.R
+import dz.ocasionet.admin.data.AdminPaymentQueue
 import dz.ocasionet.core.model.PaymentMethodType
 import dz.ocasionet.core.model.PaymentStatus
 import dz.ocasionet.core.model.SupabaseConfigStatus
@@ -313,9 +321,9 @@ fun AdminLoginScreen(viewModel: AdminViewModel) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         "• لا يُسمح بإنشاء حساب مشرف من التطبيق.\n" +
-                            "• يتحقق الخادم من دور المشرف عبر دالة PostgreSQL المحمية public.is_admin().\n" +
-                            "• يُرفض دخول أي مستخدم عادي حتى لو كان يملك حساباً صالحاً في Supabase Auth.\n" +
-                            "• لا يحتوي التطبيق على مفتاح service_role نهائياً.",
+                        "• يتحقق الخادم من صلاحية المشرف قبل تنفيذ الإجراءات الحساسة.\n" +
+                            "• لا تكفي بيانات تسجيل الدخول وحدها للوصول إلى لوحة الإدارة.\n" +
+                            "• لا يتضمن التطبيق مفاتيح سرية تمنح صلاحيات إدارية.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
@@ -359,68 +367,72 @@ fun AdminLoginScreen(viewModel: AdminViewModel) {
             }
         }
 
-        item {
-            OutlinedButton(
-                onClick = {
-                    val quickEmail = email.trim().ifBlank { "admin@occasionet.dz" }
-                    val quickPass = if (password.length >= 6) password else "Admin@2026"
-                    viewModel.signInAdmin(quickEmail, quickPass)
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("admin_quick_preview_button")
-            ) {
-                Text("دخول سريع للوحة الإدارة (فحص جميع الوظائف الـ 18)")
+        if (BuildConfig.DEBUG) {
+            item {
+                OutlinedButton(
+                    onClick = {
+                        val quickEmail = email.trim().ifBlank { "admin@occasionet.dz" }
+                        val quickPass = if (password.length >= 6) password else "LocalPreview${System.currentTimeMillis()}"
+                        viewModel.signInAdmin(quickEmail, quickPass)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_quick_preview_button")
+                ) {
+                    Text("دخول وضع المعاينة المحلي (نسخة التطوير فقط)")
+                }
             }
         }
 
-        item {
-            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (configStatus is SupabaseConfigStatus.Configured) {
-                                    "حالة Supabase: متصل (${(configStatus as SupabaseConfigStatus.Configured).url})"
-                                } else {
-                                    "إعداد اتصال Supabase (للحزم المبنية عبر GitHub Actions)"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "يمكنك حفظ رابط المشروع ومفتاح Publishable/Anon Key محلياً في DataStore المشفر دون إعادة بناء APK.",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        TextButton(onClick = { showSupabaseConfigSection = !showSupabaseConfigSection }) {
-                            Text(if (showSupabaseConfigSection) "إخفاء" else "ضبط المفتاح")
-                        }
-                    }
-
-                    if (showSupabaseConfigSection || configStatus !is SupabaseConfigStatus.Configured) {
-                        OutlinedTextField(
-                            value = customUrl,
-                            onValueChange = { customUrl = it },
-                            label = { Text("SUPABASE_URL") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = customAnonKey,
-                            onValueChange = { customAnonKey = it },
-                            label = { Text("SUPABASE_ANON_KEY (sb_publishable_... أو eyJ...)") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Button(
-                            onClick = { viewModel.saveSupabaseConnectionConfig(customUrl, customAnonKey) },
-                            enabled = customUrl.isNotBlank() && customAnonKey.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth()
+        if (BuildConfig.DEBUG) {
+            item {
+                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("حفظ إعدادات Supabase في DataStore")
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (configStatus is SupabaseConfigStatus.Configured) {
+                                        "حالة الاتصال: نشط"
+                                    } else {
+                                        "إعداد اتصال الخدمة"
+                                    },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "إعدادات المطور؛ لا تظهر في نسخة الإنتاج.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            TextButton(onClick = { showSupabaseConfigSection = !showSupabaseConfigSection }) {
+                                Text(if (showSupabaseConfigSection) "إخفاء" else "ضبط الإعدادات")
+                            }
+                        }
+
+                        if (showSupabaseConfigSection || configStatus !is SupabaseConfigStatus.Configured) {
+                            OutlinedTextField(
+                                value = customUrl,
+                                onValueChange = { customUrl = it },
+                                label = { Text("رابط الاتصال") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = customAnonKey,
+                                onValueChange = { customAnonKey = it },
+                                label = { Text("مفتاح الاتصال العام") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Button(
+                                onClick = { viewModel.saveSupabaseConnectionConfig(customUrl, customAnonKey) },
+                                enabled = customUrl.isNotBlank() && customAnonKey.isNotBlank(),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("حفظ إعدادات الاتصال")
+                            }
                         }
                     }
                 }
@@ -552,14 +564,14 @@ fun AdminDashboardStatsScreen(viewModel: AdminViewModel) {
                         Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "حالة الجاهزية الأمنية وتخزين الجلسات (DataStore + RLS)",
+                            "حماية لوحة الإدارة والجلسات",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    Text("• التحقق الخادمي من دور المشرف: مفعّل عبر دالة is_admin() عند كل عملية حساسة")
-                    Text("• تشفير رموز الجلسة: محفوظة ومشفرة بـ AES/GCM داخل DataStoreRepository")
-                    Text("• إيصالات الدفع: محمية في حاوية payment-receipts بروابط مؤقتة قصيرة الصلاحية (120 ثانية)")
+                    Text("• يتحقق الخادم من صلاحيات المشرف قبل كل إجراء حساس.")
+                    Text("• تُحفظ بيانات الدخول بشكل مشفر على الجهاز.")
+                    Text("• تُحفظ إيصالات الدفع بشكل خاص؛ ويجدد التطبيق وصول المشرف عند الحاجة.")
                 }
             }
         }
@@ -567,9 +579,15 @@ fun AdminDashboardStatsScreen(viewModel: AdminViewModel) {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun AdminPendingPaymentsScreen(viewModel: AdminViewModel) {
     val pending by viewModel.repository.adminPendingPayments.collectAsState()
-
+    var query by remember { mutableStateOf("") }
+    var paymentMethod by remember { mutableStateOf<String?>(null) }
+    var oldestFirst by remember { mutableStateOf(true) }
+    val visibleRequests = remember(pending, query, paymentMethod, oldestFirst) {
+        AdminPaymentQueue.filterAndSort(pending, query, paymentMethod, oldestFirst)
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -577,23 +595,58 @@ fun AdminPendingPaymentsScreen(viewModel: AdminViewModel) {
     ) {
         item {
             Text("طلبات الدفع المعلقة للمراجعة اليدوية", style = MaterialTheme.typography.headlineMedium)
+            Text("${visibleRequests.size} من أصل ${pending.size} طلب بانتظار المراجعة")
         }
-        if (pending.isEmpty()) {
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("بحث بالمعرّف أو المستخدم أو مرجع التحويل") },
+                modifier = Modifier.fillMaxWidth().testTag("admin_payment_queue_search")
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = paymentMethod == null,
+                    onClick = { paymentMethod = null },
+                    label = { Text("كل الوسائل") }
+                )
+                PaymentMethodType.entries.forEach { method ->
+                    FilterChip(
+                        selected = paymentMethod == method.dbValue,
+                        onClick = { paymentMethod = method.dbValue },
+                        label = { Text(method.labelAr) }
+                    )
+                }
+                FilterChip(
+                    selected = oldestFirst,
+                    onClick = { oldestFirst = !oldestFirst },
+                    label = { Text(if (oldestFirst) "الأقدم أولاً" else "الأحدث أولاً") },
+                    modifier = Modifier.testTag("admin_payment_queue_sort")
+                )
+            }
+        }
+        if (visibleRequests.isEmpty()) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("لا توجد طلبات دفع معلقة حالياً.")
+                        Text(if (pending.isEmpty()) "لا توجد طلبات دفع معلقة حالياً." else "لا توجد نتائج تطابق البحث أو الفلاتر.")
                     }
                 }
             }
         } else {
-            items(pending, key = { it.id }) { req ->
+            items(visibleRequests, key = { it.id }) { req ->
                 ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("طلب #${req.id.take(8)} • ${req.amountDzd} دج", fontWeight = FontWeight.Bold)
                         Text("المستخدم: ${req.userId}")
                         Text("الوسيلة: ${PaymentMethodType.fromDb(req.paymentMethod).labelAr}")
                         Text("رقم الوصل / المرجع: ${req.transactionReference}")
+                        Text(
+                            AdminPaymentQueue.waitingLabel(req.createdAt),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.testTag("payment_wait_age_${req.id}")
+                        )
                         Button(
                             onClick = { viewModel.inspectPaymentReceipt(req) },
                             modifier = Modifier.fillMaxWidth()
@@ -611,9 +664,24 @@ fun AdminPendingPaymentsScreen(viewModel: AdminViewModel) {
 fun AdminReceiptInspectorScreen(viewModel: AdminViewModel) {
     val req by viewModel.selectedPayment.collectAsState()
     val signedUrl by viewModel.signedReceiptUrl.collectAsState()
+    val context = LocalContext.current
     var rejectionReason by remember { mutableStateOf("") }
 
     val item = req
+    var receiptImageFailed by remember(item?.id) { mutableStateOf(false) }
+    val receiptImageRequest = remember(item?.id, signedUrl) {
+        signedUrl?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .memoryCachePolicy(CachePolicy.DISABLED)
+                .diskCachePolicy(CachePolicy.DISABLED)
+                .networkCachePolicy(CachePolicy.DISABLED)
+                .build()
+        }
+    }
+    LaunchedEffect(signedUrl) {
+        if (signedUrl != null) receiptImageFailed = false
+    }
     if (item == null) {
         Text("لم يتم اختيار طلب دفع للمراجعة.", modifier = Modifier.padding(16.dp))
         return
@@ -635,9 +703,60 @@ fun AdminReceiptInspectorScreen(viewModel: AdminViewModel) {
                     Text("المبلغ المطلوب: ${item.amountDzd} دج")
                     Text("وسيلة الدفع: ${PaymentMethodType.fromDb(item.paymentMethod).labelAr}")
                     Text("رقم المرجع البريدي: ${item.transactionReference}")
-                    Text("مسار الإيصال الخاص: ${item.receiptStoragePath}")
+                    Text(AdminPaymentQueue.waitingLabel(item.createdAt), modifier = Modifier.testTag("inspected_payment_wait_age"))
+                    if (item.receiptMimeType.startsWith("image/", ignoreCase = true)) {
+                        if (receiptImageRequest != null && !receiptImageFailed) {
+                            AsyncImage(
+                                model = receiptImageRequest,
+                                contentDescription = "صورة إثبات الدفع",
+                                contentScale = ContentScale.Fit,
+                                onError = {
+                                    if (!viewModel.refreshReceiptPreview(item.id, automatic = true)) {
+                                        receiptImageFailed = true
+                                    }
+                                },
+                                onSuccess = { receiptImageFailed = false },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(320.dp)
+                                    .testTag("admin_receipt_image")
+                            )
+                        } else {
+                            Text(
+                                when {
+                                    receiptImageFailed -> "تعذر تحميل الإيصال بعد تحديث الوصول."
+                                    else -> "جارٍ تجهيز معاينة الإيصال الخاص…"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (receiptImageFailed) {
+                                OutlinedButton(
+                                    onClick = {
+                                        receiptImageFailed = false
+                                        viewModel.refreshReceiptPreview(item.id)
+                                    },
+                                    modifier = Modifier.testTag("admin_retry_receipt_preview")
+                                ) {
+                                    Text("إعادة تحميل الإيصال")
+                                }
+                            }
+                        }
+                    } else if (item.receiptMimeType.equals("application/pdf", ignoreCase = true)) {
+                        signedUrl?.let {
+                            AdminReceiptPdfPreview(
+                                signedUrl = it,
+                                onAutoRefresh = {
+                                    viewModel.refreshReceiptPreview(item.id, automatic = true)
+                                },
+                                onManualRefresh = { viewModel.refreshReceiptPreview(item.id) }
+                            )
+                        }
+                            ?: Text("جارٍ تجهيز وصول آمن لمعاينة ملف PDF…")
+                    } else {
+                        Text("نوع المرفق غير مدعوم للمعاينة داخل التطبيق.")
+                    }
                     Text(
-                        text = if (signedUrl != null) "رابط موقع مؤقت (صالح لـ 120 ثانية): $signedUrl" else "جاري توليد رابط موقع قصير الصلاحية من bucket (payment-receipts)...",
+                        text = if (signedUrl != null) "تم تجهيز الوصول الآمن للإيصال." else "جارٍ تجهيز الوصول الآمن للإيصال…",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )

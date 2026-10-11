@@ -85,3 +85,13 @@ jobs:
           name: OccasioNet-Admin-debug-apk
           path: dist/OccasioNet-Admin-debug.apk
           if-no-files-found: error
+
+      - name: 12. Run User & Admin UI Tests on Android Emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: gradle :app:connectedDebugAndroidTest :adminApp:connectedDebugAndroidTest
