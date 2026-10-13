@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: 1. Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 2. Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -30,7 +30,7 @@ jobs:
           packages: platform-tools
 
       - name: 4. Setup Gradle with Caching
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: 5. Prepare Safe Environment File (No service_role secrets)
         env:
@@ -73,14 +73,14 @@ jobs:
           cp adminApp/build/outputs/apk/debug/adminApp-debug.apk dist/OccasioNet-Admin-debug.apk
 
       - name: 10. Upload OccasioNet-User-debug.apk Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: OccasioNet-User-debug-apk
           path: dist/OccasioNet-User-debug.apk
           if-no-files-found: error
 
       - name: 11. Upload OccasioNet-Admin-debug.apk Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: OccasioNet-Admin-debug-apk
           path: dist/OccasioNet-Admin-debug.apk
