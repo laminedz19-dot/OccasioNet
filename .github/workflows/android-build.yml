@@ -86,12 +86,31 @@ jobs:
           path: dist/OccasioNet-Admin-debug.apk
           if-no-files-found: error
 
-      - name: 12. Run User & Admin UI Tests on Android Emulator
+      - name: 12. Enable KVM for Android Emulator
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "KVM device is unavailable on this runner; UI tests cannot start an x86_64 emulator."
+            exit 1
+          fi
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+
+      - name: 13. Run User & Admin UI Tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           target: google_apis
           arch: x86_64
           profile: pixel_2
+          emulator-boot-timeout: 600
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: gradle :app:connectedDebugAndroidTest :adminApp:connectedDebugAndroidTest
+
+      - name: 14. Collect Android UI Test Diagnostics
+        if: ${{ failure() }}
+        run: |
+          adb devices -l || true
+          adb -s emulator-5554 shell getprop || true
+          adb -s emulator-5554 logcat -d -b all -v time || true
